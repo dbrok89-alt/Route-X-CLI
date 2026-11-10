@@ -3,9 +3,11 @@ package agent
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -98,24 +100,100 @@ func TestDenyListBlocksCommand(t *testing.T) {
 }
 
 func TestOpenAICompatibleProviderWithMock(t *testing.T) {
+	var gotAuth, gotBody string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/chat/completions" {
 			t.Errorf("unexpected path %s", r.URL.Path)
 		}
+		gotAuth = r.Header.Get("Authorization")
+		data, _ := io.ReadAll(r.Body)
+		gotBody = string(data)
 		fmt.Fprint(w, `{"choices": [{"message": {"content": "mock reply"}}]}`)
 	}))
 	defer srv.Close()
-	p := OpenAICompatibleProvider{APIKey: "k", Model: "mock-model", BaseURL: srv.URL}
+	p := OpenAICompatibleProvider{APIKey: "sk-test", Model: "mock-model", BaseURL: srv.URL}
 	reply, err := p.Complete(context.Background(), "hi", "ctx")
 	if err != nil || reply != "mock reply" {
 		t.Fatalf("reply = %q, err=%v", reply, err)
 	}
+	// The request itself must be genuine: key in header, model and
+	// prompt in the body — a test that only checks the reply would
+	// pass even with a broken request.
+	if gotAuth != "Bearer sk-test" {
+		t.Fatalf("Authorization = %q", gotAuth)
+	}
+	if !strings.Contains(gotBody, `"mock-model"`) || !strings.Contains(gotBody, "hi") {
+		t.Fatalf("request body = %s", gotBody)
+	}
 }
 
-func TestAnthropicProviderWithMockNeedsKey(t *testing.T) {
-	p := AnthropicProvider{APIKey: "", Model: "mock"}
-	if _, err := p.Complete(context.Background(), "hi", "ctx"); err == nil {
+func TestAnthropicProviderWithMock(t *testing.T) {
+	var gotKey, gotVersion, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/messages" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		gotKey = r.Header.Get("x-api-key")
+		gotVersion = r.Header.Get("anthropic-version")
+		data, _ := io.ReadAll(r.Body)
+		gotBody = string(data)
+		fmt.Fprint(w, `{"content": [{"text": "mock anthropic reply"}]}`)
+	}))
+	defer srv.Close()
+	p := AnthropicProvider{APIKey: "sk-ant-test", Model: "mock-claude", BaseURL: srv.URL}
+	reply, err := p.Complete(context.Background(), "hi", "ctx")
+	if err != nil || reply != "mock anthropic reply" {
+		t.Fatalf("reply = %q, err=%v", reply, err)
+	}
+	if gotKey != "sk-ant-test" || gotVersion != "2023-06-01" {
+		t.Fatalf("headers key=%q version=%q", gotKey, gotVersion)
+	}
+	if !strings.Contains(gotBody, `"mock-claude"`) || !strings.Contains(gotBody, "hi") {
+		t.Fatalf("request body = %s", gotBody)
+	}
+	// Empty key must still fail before any request is made.
+	if _, err := (AnthropicProvider{Model: "mock"}).Complete(context.Background(), "hi", "ctx"); err == nil {
 		t.Fatal("anthropic without key should error")
+	}
+}
+
+func TestIsAllowedRequiresExactCommand(t *testing.T) {
+	ag := newTestAgent(t, "default")
+	if !ag.IsAllowed("go vet ./...") {
+		t.Fatal("exact allow entry should be allowed")
+	}
+	// A chained command that merely contains an allowed entry must
+	// NOT be auto-approved — this was a real hole in v0.2.0.
+	if ag.IsAllowed("go vet ./...; rm -rf /") {
+		t.Fatal("chained command must not be auto-approved")
+	}
+	if ag.IsAllowed("go vet ./... && echo pwned") {
+		t.Fatal("chained command must not be auto-approved")
+	}
+}
+
+func TestReviewOnRealGitRepo(t *testing.T) {
+	ag := newTestAgent(t, "default")
+	run := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = ag.Workdir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run("init", "-q")
+	run("config", "user.email", "t@t")
+	run("config", "user.name", "t")
+	_ = os.WriteFile(filepath.Join(ag.Workdir, "a.go"), []byte("package main\n"), 0o644)
+	run("add", "-A")
+	run("commit", "-qm", "init")
+	_ = os.WriteFile(filepath.Join(ag.Workdir, "a.go"), []byte("package main\n\n// TODO: fix this\n"), 0o644)
+	reply, err := ag.Review()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(reply, "TODO") || !strings.Contains(reply, "a.go") {
+		t.Fatalf("review = %q", reply)
 	}
 }
 
