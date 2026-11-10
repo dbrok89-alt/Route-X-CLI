@@ -16,6 +16,7 @@ import (
 	"route-x/internal/loop"
 	"route-x/internal/session"
 	"route-x/internal/tools"
+	"route-x/internal/web"
 )
 
 func newTestAgent(t *testing.T, mode string) *Agent {
@@ -564,5 +565,184 @@ func TestInternProviderRemapsLocalPlaceholder(t *testing.T) {
 	p := a.provider().(OpenAICompatibleProvider)
 	if p.Model != "Atria-Dawn" {
 		t.Fatalf("model = %q, want Atria-Dawn", p.Model)
+	}
+}
+
+func TestAgentNewTools(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.MkdirAll(filepath.Join(dir, ".route-x", "skills"), 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "a.go"), []byte("package main\n"), 0o644)
+	_ = os.MkdirAll(filepath.Join(dir, "sub"), 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "sub", "b.go"), []byte("package main\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, ".route-x", "skills", "lint.md"), []byte("# lint\nRun go vet.\n"), 0o644)
+	oldWd, _ := os.Getwd()
+	_ = os.Chdir(dir)
+	defer os.Chdir(oldWd)
+
+	cfg := config.Config{Model: "local", Provider: "local", Mode: "auto", Sandbox: "workspace-write", Approval: "on-request"}
+	a := New(cfg, dir, tools.AutoApprove)
+	ctx := context.Background()
+	call := func(name string, args map[string]any) string {
+		t.Helper()
+		out, err := a.ExecuteTool(ctx, loop.ToolCall{Name: name, Arguments: args})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		return out
+	}
+	// glob
+	out := call("glob", map[string]any{"pattern": "**/*.go"})
+	if !strings.Contains(out, "a.go") || !strings.Contains(out, "b.go") {
+		t.Fatalf("glob: %q", out)
+	}
+	if _, err := a.ExecuteTool(ctx, loop.ToolCall{Name: "glob", Arguments: map[string]any{"pattern": "../*.go"}}); err == nil {
+		t.Fatal("glob must refuse .. patterns")
+	}
+	// skill
+	out = call("skill", map[string]any{"name": "lint"})
+	if !strings.Contains(out, "Run go vet") {
+		t.Fatalf("skill: %q", out)
+	}
+	if _, err := a.ExecuteTool(ctx, loop.ToolCall{Name: "skill", Arguments: map[string]any{"name": "nope"}}); err == nil {
+		t.Fatal("skill must fail for unknown names")
+	}
+	// todowrite
+	out = call("todowrite", map[string]any{"action": "add", "text": "fix bug"})
+	out = call("todowrite", map[string]any{"action": "add", "text": "write test"})
+	out = call("todowrite", map[string]any{"action": "start", "index": float64(1)})
+	out = call("todowrite", map[string]any{"action": "done", "index": float64(2)})
+	if !strings.Contains(out, "[~] fix bug") || !strings.Contains(out, "[x] write test") {
+		t.Fatalf("todowrite: %q", out)
+	}
+	if _, err := a.ExecuteTool(ctx, loop.ToolCall{Name: "todowrite", Arguments: map[string]any{"action": "done", "index": float64(9)}}); err == nil {
+		t.Fatal("todowrite must reject an out-of-range index")
+	}
+	// apply_patch via the loop
+	out = call("apply_patch", map[string]any{"patch": "*** Add File: c.go\npackage main\n"})
+	if !strings.Contains(out, "Patch applied") {
+		t.Fatalf("apply_patch: %q", out)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "c.go")); err != nil {
+		t.Fatal("c.go not created by apply_patch")
+	}
+	if _, err := a.ExecuteTool(ctx, loop.ToolCall{Name: "apply_patch", Arguments: map[string]any{"patch": "*** Add File: c.go\nx\n"}}); err == nil {
+		t.Fatal("apply_patch must refuse adding an existing file")
+	}
+}
+
+func TestAgentQuestionTaskPlan(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Config{Model: "local", Provider: "local", Mode: "auto", Sandbox: "workspace-write", Approval: "on-request"}
+	a := New(cfg, dir, tools.AutoApprove)
+	ctx := context.Background()
+
+	// question: refused without a QuestionFunc (print mode).
+	if _, err := a.ExecuteTool(ctx, loop.ToolCall{Name: "question", Arguments: map[string]any{"question": "pick one"}}); err == nil {
+		t.Fatal("question must fail without QuestionFunc")
+	}
+	// question: scripted func picks an option.
+	a.QuestionFunc = func(q string, opts []string) (string, error) {
+		if q != "pick one" || len(opts) != 2 {
+			t.Fatalf("QuestionFunc got %q %v", q, opts)
+		}
+		return opts[1], nil
+	}
+	out, err := a.ExecuteTool(ctx, loop.ToolCall{Name: "question", Arguments: map[string]any{
+		"question": "pick one", "options": []any{"a", "b"}}})
+	if err != nil || !strings.Contains(out, "User answered: b") {
+		t.Fatalf("question: out=%q err=%v", out, err)
+	}
+	// plan: records steps.
+	out, err = a.ExecuteTool(ctx, loop.ToolCall{Name: "plan", Arguments: map[string]any{
+		"steps": []any{"read the code", "fix it", "test it"}}})
+	if err != nil || len(a.CurrentPlan) != 3 || !strings.Contains(out, "Plan recorded (3 steps)") {
+		t.Fatalf("plan: out=%q err=%v plan=%v", out, err, a.CurrentPlan)
+	}
+	if _, err := a.ExecuteTool(ctx, loop.ToolCall{Name: "plan", Arguments: map[string]any{"steps": []any{}}}); err == nil {
+		t.Fatal("plan must reject empty steps")
+	}
+	// task: runs a subagent through a mock OpenAI-compatible
+	// provider and returns its answer; depth 1 cannot nest.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\": [{\"delta\": {\"content\": \"subagent done\"}}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+	cfg2 := config.Config{Model: "Atria-Dawn", Provider: "intern", BaseURL: srv.URL, Mode: "auto", Sandbox: "workspace-write", Approval: "on-request"}
+	a2 := New(cfg2, dir, tools.AutoApprove)
+	out, err = a2.ExecuteTool(ctx, loop.ToolCall{Name: "task", Arguments: map[string]any{"prompt": "do the thing"}})
+	if err != nil || out != "subagent done" {
+		t.Fatalf("task: out=%q err=%v", out, err)
+	}
+	sub := New(cfg2, dir, tools.AutoApprove)
+	sub.TaskDepth = 1
+	if _, err := sub.ExecuteTool(ctx, loop.ToolCall{Name: "task", Arguments: map[string]any{"prompt": "nest"}}); err == nil {
+		t.Fatal("task must refuse nesting at depth 1")
+	}
+}
+
+func TestAgentWebAndLSPTools(t *testing.T) {
+	t.Setenv("ROUTE_X_ALLOW_PRIVATE_FETCH", "1")
+	dir := t.TempDir()
+	// Fake web server for webfetch/websearch.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/html") {
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = w.Write([]byte(`<a class="result__a" href="https://go.dev">Go Home</a><a class="result__snippet" href="#">the Go language</a>`))
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = w.Write([]byte("hello web"))
+	}))
+	defer srv.Close()
+
+	cfg := config.Config{Model: "local", Provider: "local", Mode: "auto", Sandbox: "workspace-write", Approval: "on-request"}
+	a := New(cfg, dir, tools.AutoApprove)
+	a.WebSearcher = &web.Searcher{DDGBaseURL: srv.URL}
+	ctx := context.Background()
+
+	out, err := a.ExecuteTool(ctx, loop.ToolCall{Name: "webfetch", Arguments: map[string]any{"url": srv.URL + "/page"}})
+	if err != nil || out != "hello web" {
+		t.Fatalf("webfetch: out=%q err=%v", out, err)
+	}
+	out, err = a.ExecuteTool(ctx, loop.ToolCall{Name: "websearch", Arguments: map[string]any{"query": "go"}})
+	if err != nil || !strings.Contains(out, "Go Home") || !strings.Contains(out, "the Go language") {
+		t.Fatalf("websearch: out=%q err=%v", out, err)
+	}
+	if _, err := a.ExecuteTool(ctx, loop.ToolCall{Name: "webfetch", Arguments: map[string]any{"url": "ftp://x/y"}}); err == nil {
+		t.Fatal("webfetch must refuse non-http schemes")
+	}
+
+	// LSP tool against the fake server (test cwd is internal/agent).
+	script, err := filepath.Abs("../lsp/testdata/lsp_fake.py")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.LSPCommand = "python3 " + script
+	out, err = a.ExecuteTool(ctx, loop.ToolCall{Name: "lsp", Arguments: map[string]any{
+		"operation": "definition", "file": "a.go", "line": float64(1), "character": float64(2)}})
+	if err != nil || !strings.Contains(out, "def.go:10:6") {
+		t.Fatalf("lsp definition: out=%q err=%v", out, err)
+	}
+	out, err = a.ExecuteTool(ctx, loop.ToolCall{Name: "lsp", Arguments: map[string]any{
+		"operation": "hover", "file": "a.go", "line": float64(1), "character": float64(2)}})
+	if err != nil || out != "func Foo() int" {
+		t.Fatalf("lsp hover: out=%q err=%v", out, err)
+	}
+	out, err = a.ExecuteTool(ctx, loop.ToolCall{Name: "lsp", Arguments: map[string]any{
+		"operation": "symbols", "file": "a.go"}})
+	if err != nil || !strings.Contains(out, "Foo") || !strings.Contains(out, "Bar") {
+		t.Fatalf("lsp symbols: out=%q err=%v", out, err)
+	}
+	if _, err := a.ExecuteTool(ctx, loop.ToolCall{Name: "lsp", Arguments: map[string]any{
+		"operation": "teleport", "file": "a.go"}}); err == nil {
+		t.Fatal("lsp must reject unknown operations")
+	}
+	// No server configured at all.
+	b := New(cfg, dir, tools.AutoApprove)
+	if _, err := b.ExecuteTool(ctx, loop.ToolCall{Name: "lsp", Arguments: map[string]any{
+		"operation": "symbols", "file": "a.go"}}); err == nil {
+		t.Fatal("lsp must fail when no server is configured")
 	}
 }
