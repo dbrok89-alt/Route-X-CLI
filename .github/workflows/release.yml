@@ -1,0 +1,44 @@
+# CD — jalan hanya saat ada tag vX.Y.Z, contoh: git tag v0.1.0 && git push origin v0.1.0
+# Yang dibuat: binary untuk Linux, Windows, macOS (amd64 + arm64),
+# lalu GitHub Release otomatis dengan binary itu sebagai lampiran.
+# Tidak butuh secret tambahan: memakai GITHUB_TOKEN bawaan Actions.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache: true
+
+      - name: Build binaries
+        run: |
+          CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -o route-x-linux-amd64 .
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o route-x-windows-amd64.exe .
+          CGO_ENABLED=0 GOOS=darwin  GOARCH=amd64 go build -o route-x-darwin-amd64 .
+          CGO_ENABLED=0 GOOS=darwin  GOARCH=arm64 go build -o route-x-darwin-arm64 .
+          ls -lh route-x-*
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            route-x-linux-amd64
+            route-x-windows-amd64.exe
+            route-x-darwin-amd64
+            route-x-darwin-arm64
+          generate_release_notes: true
