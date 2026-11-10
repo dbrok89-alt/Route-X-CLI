@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -82,6 +83,45 @@ func List() ([]string, error) {
 	}
 	sort.Sort(sort.Reverse(sort.StringSlice(ids)))
 	return ids, nil
+}
+
+// Match is one session that contains the search text.
+type Match struct {
+	ID      string
+	Excerpt string // first matching message, truncated
+}
+
+// Search finds sessions whose messages contain query (case
+// insensitive), newest first. It returns at most 10 matches.
+func Search(query string) ([]Match, error) {
+	if strings.TrimSpace(query) == "" {
+		return nil, fmt.Errorf("search needs a word")
+	}
+	ids, err := List()
+	if err != nil {
+		return nil, err
+	}
+	var out []Match
+	for _, id := range ids {
+		s, err := Load(id)
+		if err != nil {
+			continue
+		}
+		for _, m := range s.Messages {
+			if strings.Contains(strings.ToLower(m.Content), strings.ToLower(query)) {
+				excerpt := m.Content
+				if len(excerpt) > 120 {
+					excerpt = excerpt[:120] + "…"
+				}
+				out = append(out, Match{ID: id, Excerpt: excerpt})
+				break
+			}
+		}
+		if len(out) >= 10 {
+			break
+		}
+	}
+	return out, nil
 }
 
 // Load reads a session by id.
