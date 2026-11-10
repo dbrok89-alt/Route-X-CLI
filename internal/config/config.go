@@ -22,7 +22,7 @@ import (
 type Config struct {
 	Model    string `json:"model"`
 	Mode     string `json:"mode"`     // default | accept-edits | auto | plan
-	Provider string `json:"provider"` // local | gemini | openai | anthropic | ollama
+	Provider string `json:"provider"` // local | gemini | openai | anthropic | ollama | intern
 	APIKey   string `json:"api_key,omitempty"`
 	// Codex-style safety knobs (v0.2.0).
 	Sandbox  string   `json:"sandbox"`            // read-only | workspace-write | danger-full-access
@@ -127,11 +127,34 @@ func ValidMode(m string) bool {
 // ValidProvider reports whether p is a known provider.
 func ValidProvider(p string) bool {
 	switch p {
-	case "local", "gemini", "openai", "anthropic", "ollama":
+	case "local", "gemini", "openai", "anthropic", "ollama", "intern":
 		return true
 	}
 	return false
 }
+
+// DefaultModelFor returns the default model for a provider.
+// Atria-Dawn is Intern's flagship agentic model (512K context,
+// text-only) — the natural default for a coding agent on the
+// Intern discovery API.
+func DefaultModelFor(provider string) string {
+	switch provider {
+	case "openai":
+		return "gpt-4o"
+	case "anthropic":
+		return "claude-sonnet-4"
+	case "ollama":
+		return "llama3.1"
+	case "intern":
+		return "Atria-Dawn"
+	}
+	return "gemini-2.0-flash"
+}
+
+// InternBaseURL is the OpenAI-compatible endpoint of Shanghai AI
+// Lab's Intern discovery API. The same host without /v1 serves
+// Anthropic-compatible clients.
+const InternBaseURL = "https://discovery-api.intern-ai.org.cn/v1"
 
 // ValidSandbox reports whether s is a known Codex-style sandbox.
 func ValidSandbox(s string) bool {
@@ -163,6 +186,8 @@ func EnvAPIKey(provider string) string {
 		return os.Getenv("ANTHROPIC_API_KEY")
 	case "ollama":
 		return os.Getenv("OLLAMA_API_KEY")
+	case "intern":
+		return os.Getenv("INTERN_API_KEY")
 	}
 	return ""
 }

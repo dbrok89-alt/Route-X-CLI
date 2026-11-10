@@ -31,6 +31,40 @@ func captureStdout(t *testing.T, f func()) string {
 	return string(buf[:n])
 }
 
+// captureStderr runs f while os.Stderr points at a pipe and returns
+// everything f printed.
+func captureStderr(t *testing.T, f func()) string {
+	t.Helper()
+	old := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+	f()
+	_ = w.Close()
+	os.Stderr = old
+	buf := make([]byte, 1<<20)
+	n, _ := r.Read(buf)
+	_ = r.Close()
+	return string(buf[:n])
+}
+
+// Regression test for the v0.3.0 --help gap: serve/share/cron existed
+// as subcommands but --help never mentioned them, and the slash list
+// was missing /compact, /plugins, /checkpoint, /search and /lint.
+func TestHelpListsSubcommands(t *testing.T) {
+	out := captureStderr(t, printUsage)
+	for _, want := range []string{
+		"route-x serve", "route-x share", "route-x cron",
+		"/compact", "/plugins", "/checkpoint", "/search", "/lint",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("--help is missing %q:\n%s", want, out)
+		}
+	}
+}
+
 // Regression test for the bug the v0.2.0 smoke test caught:
 // handleSlash used to receive config by value, so /sandbox and
 // /mode changed the agent and the saved file but the REPL's own

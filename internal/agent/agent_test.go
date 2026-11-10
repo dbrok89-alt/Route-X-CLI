@@ -508,3 +508,50 @@ func TestSpawnCompletes(t *testing.T) {
 		t.Fatalf("subagent = %+v", done)
 	}
 }
+
+func TestInternProviderDefaults(t *testing.T) {
+	cfg := config.Config{Model: "gemini-2.0-flash", Provider: "intern"}
+	a := New(cfg, t.TempDir(), tools.AutoApprove)
+	p, ok := a.provider().(OpenAICompatibleProvider)
+	if !ok {
+		t.Fatalf("intern provider type = %T", a.provider())
+	}
+	if p.BaseURL != "https://discovery-api.intern-ai.org.cn/v1" {
+		t.Fatalf("base URL = %q", p.BaseURL)
+	}
+	if p.Model != "Atria-Dawn" {
+		t.Fatalf("model = %q, want Atria-Dawn (the generic gemini default must not leak into Intern)", p.Model)
+	}
+}
+
+func TestInternProviderKeepsExplicitModelAndBaseURL(t *testing.T) {
+	cfg := config.Config{Model: "Intern-S2", Provider: "intern", BaseURL: "https://example.invalid/v1"}
+	a := New(cfg, t.TempDir(), tools.AutoApprove)
+	p := a.provider().(OpenAICompatibleProvider)
+	if p.Model != "Intern-S2" || p.BaseURL != "https://example.invalid/v1" {
+		t.Fatalf("provider = %+v", p)
+	}
+}
+
+func TestInternProviderToolCallingViaMock(t *testing.T) {
+	// The Intern discovery API is OpenAI-compatible: a mock
+	// server answering like /v1/chat/completions must drive the
+	// agentic loop through the intern provider wiring. Note the
+	// mock must answer with SSE: RunAgent streams when the
+	// provider supports it (OpenAICompatibleProvider does).
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/chat/completions" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\": [{\"delta\": {\"content\": \"hello from intern\"}}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+	cfg := config.Config{Model: "Atria-Dawn", Provider: "intern", BaseURL: srv.URL, Mode: "auto", Sandbox: "workspace-write", Approval: "on-request"}
+	a := New(cfg, t.TempDir(), tools.AutoApprove)
+	answer, err := a.RunAgent(context.Background(), "say hello", nil)
+	if err != nil || answer != "hello from intern" {
+		t.Fatalf("answer = %q, err=%v", answer, err)
+	}
+}

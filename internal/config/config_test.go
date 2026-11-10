@@ -109,3 +109,19 @@ func TestLoadInvalidModeFallsBackToDefault(t *testing.T) {
 		t.Fatalf("invalid config not sanitised: %+v", loaded)
 	}
 }
+
+func TestInternProvider(t *testing.T) {
+	if !ValidProvider("intern") {
+		t.Fatal("intern should be a valid provider")
+	}
+	t.Setenv("INTERN_API_KEY", "sk-intern-test")
+	if got := EnvAPIKey("intern"); got != "sk-intern-test" {
+		t.Fatalf("INTERN_API_KEY = %q", got)
+	}
+	if got := DefaultModelFor("intern"); got != "Atria-Dawn" {
+		t.Fatalf("default intern model = %q", got)
+	}
+	if InternBaseURL != "https://discovery-api.intern-ai.org.cn/v1" {
+		t.Fatalf("intern base URL = %q", InternBaseURL)
+	}
+}

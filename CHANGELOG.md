@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.3.1 — 2026-11-10 (provider Intern + --help lengkap)
+
+- **Provider `intern` baru:** Shanghai AI Lab discovery API
+  (`https://discovery-api.intern-ai.org.cn/v1`), diverifikasi
+  langsung hidup: tanpa kunci, `GET /v1/models` menjawab 401
+  `invalid_api_key` dengan envelope error ala OpenAI — jadi
+  endpoint ini memang OpenAI-compatible. Kunci lewat
+  `INTERN_API_KEY` (dibuat di konsol Intern; ada token gratis
+  bulanan selama preview). Model default `Atria-Dawn` (model agen,
+  konteks 512K, teks saja); model lain seperti `Intern-S2` bisa
+  dipilih dengan `--model`. Host yang sama tanpa `/v1` melayani
+  klien Anthropic-compatible (`--provider anthropic --base-url
+  https://discovery-api.intern-ai.org.cn`).
+- **Perbaikan `--help`:** v0.3.0 sudah punya subcommand
+  serve/share/cron, tapi `--help` binary rilisnya tidak
+  menyebutnya, dan daftar slash command-nya ketinggalan
+  `/compact`, `/plugins`, `/checkpoint`, `/search`, dan `/lint`.
+  Perintahnya sendiri sudah berfungsi sejak v0.3.0 — hanya
+  bantuannya yang belum lengkap. Sekarang `--help` menyebut
+  ketiganya plus daftar slash yang sinkron dengan `/help`,
+  dengan test regresi yang gagal kalau salah satunya hilang lagi.
+- **Dites:** provider intern dites lewat mock server (SSE +
+  agentic loop), default model + base URL dites, model eksplisit
+  dan base URL kustom tidak ditimpa. Tes live belum bisa dari
+  mesin ini: `GET /v1/models` hidup (401 envelope OpenAI), tapi
+  `POST /v1/chat/completions` diputus di edge (EOF, terjadi juga
+  lewat curl mentah — bukan bug Route-X). Bos perlu coba sendiri
+  dengan `INTERN_API_KEY` asli dari jaringan sendiri.
+
 ## v0.3.0 — 2026-11-10 (agentic loop + OpenCode/ngrok/Hermes)
 
 Menutup jurang terbesar v0.2.1: model kini benar-benar menggerakkan
