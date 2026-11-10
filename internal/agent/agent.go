@@ -6,21 +6,28 @@
 package agent
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"route-x/internal/checkpoint"
 	"route-x/internal/config"
+	"route-x/internal/loop"
 	"route-x/internal/memory"
+	"route-x/internal/session"
+	"route-x/internal/skills"
 	"route-x/internal/tools"
 )
 
@@ -49,11 +56,21 @@ func (LocalProvider) Complete(_ context.Context, prompt, workspaceContext string
 // or config.api_key. Model names change over time; the default in
 // config is a starting point, override with --model.
 type GeminiProvider struct {
-	APIKey string
-	Model  string
+	APIKey  string
+	Model   string
+	BaseURL string // default https://generativelanguage.googleapis.com
 }
 
 func (g GeminiProvider) Name() string { return "gemini:" + g.Model }
+
+// endpoint returns the generateContent URL for this model.
+func (g GeminiProvider) endpoint() string {
+	base := strings.TrimSuffix(g.BaseURL, "/")
+	if base == "" {
+		base = "https://generativelanguage.googleapis.com"
+	}
+	return fmt.Sprintf("%s/v1beta/models/%s:generateContent", base, g.Model)
+}
 
 func (g GeminiProvider) Complete(ctx context.Context, prompt, workspaceContext string) (string, error) {
 	if g.APIKey == "" {
@@ -61,9 +78,7 @@ func (g GeminiProvider) Complete(ctx context.Context, prompt, workspaceContext s
 	}
 	// The API key travels in a header, never in the URL, so it
 	// cannot leak into logs, shell history or error messages.
-	url := fmt.Sprintf(
-		"https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent",
-		g.Model)
+	url := g.endpoint()
 	body, _ := json.Marshal(map[string]any{
 		"contents": []map[string]any{
 			{"parts": []map[string]string{{"text": workspaceContext + "\n\nUser request:\n" + prompt}}},
@@ -102,6 +117,121 @@ func (g GeminiProvider) Complete(ctx context.Context, prompt, workspaceContext s
 		return "", fmt.Errorf("gemini returned no text")
 	}
 	return parsed.Candidates[0].Content.Parts[0].Text, nil
+}
+
+// geminiContent converts a loop message to a Gemini content block.
+// Gemini roles are "user" and "model"; tool results are
+// functionResponse parts in a user turn.
+func geminiContent(m loop.Message) map[string]any {
+	role := "user"
+	if m.Role == "assistant" {
+		role = "model"
+	}
+	parts := []map[string]any{}
+	if m.Role == "tool" {
+		parts = append(parts, map[string]any{
+			"functionResponse": map[string]any{
+				"name":     m.ToolName,
+				"response": map[string]any{"result": m.Content},
+			},
+		})
+		return map[string]any{"role": role, "parts": parts}
+	}
+	if m.Content != "" {
+		parts = append(parts, map[string]any{"text": m.Content})
+	}
+	for _, tc := range m.ToolCalls {
+		parts = append(parts, map[string]any{
+			"functionCall": map[string]any{
+				"name": tc.Name,
+				"args": tc.Arguments,
+			},
+		})
+	}
+	return map[string]any{"role": role, "parts": parts}
+}
+
+// CompleteTools sends the conversation plus function declarations
+// to Gemini and returns the model's next message, which may carry
+// function calls.
+func (g GeminiProvider) CompleteTools(ctx context.Context, messages []loop.Message, tools []loop.ToolDef) (loop.Message, loop.Usage, error) {
+	if g.APIKey == "" {
+		return loop.Message{}, loop.Usage{}, fmt.Errorf("gemini provider needs GEMINI_API_KEY (or config.api_key)")
+	}
+	contents := make([]map[string]any, 0, len(messages))
+	for _, m := range messages {
+		contents = append(contents, geminiContent(m))
+	}
+	decls := make([]map[string]any, 0, len(tools))
+	for _, t := range tools {
+		decls = append(decls, map[string]any{
+			"name":        t.Name,
+			"description": t.Description,
+			"parameters":  t.Parameters,
+		})
+	}
+	url := g.endpoint()
+	body, _ := json.Marshal(map[string]any{
+		"contents": contents,
+		"tools":    []map[string]any{{"functionDeclarations": decls}},
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return loop.Message{}, loop.Usage{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-goog-api-key", g.APIKey)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return loop.Message{}, loop.Usage{}, err
+	}
+	defer resp.Body.Close()
+	var parsed struct {
+		Candidates []struct {
+			Content struct {
+				Parts []struct {
+					Text         string `json:"text"`
+					FunctionCall *struct {
+						Name string         `json:"name"`
+						Args map[string]any `json:"args"`
+					} `json:"functionCall"`
+				} `json:"parts"`
+			} `json:"content"`
+		} `json:"candidates"`
+		UsageMetadata struct {
+			PromptTokenCount     int `json:"promptTokenCount"`
+			CandidatesTokenCount int `json:"candidatesTokenCount"`
+		} `json:"usageMetadata"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return loop.Message{}, loop.Usage{}, err
+	}
+	if parsed.Error != nil {
+		return loop.Message{}, loop.Usage{}, fmt.Errorf("gemini API error: %s", parsed.Error.Message)
+	}
+	if len(parsed.Candidates) == 0 {
+		return loop.Message{}, loop.Usage{}, fmt.Errorf("gemini returned no candidates")
+	}
+	out := loop.Message{Role: "assistant"}
+	for i, part := range parsed.Candidates[0].Content.Parts {
+		if part.Text != "" {
+			out.Content += part.Text
+		}
+		if part.FunctionCall != nil {
+			out.ToolCalls = append(out.ToolCalls, loop.ToolCall{
+				ID:        fmt.Sprintf("gemini-call-%d", i),
+				Name:      part.FunctionCall.Name,
+				Arguments: part.FunctionCall.Args,
+			})
+		}
+	}
+	return out, loop.Usage{
+		InputTokens:  parsed.UsageMetadata.PromptTokenCount,
+		OutputTokens: parsed.UsageMetadata.CandidatesTokenCount,
+	}, nil
 }
 
 // OpenAICompatibleProvider talks to any OpenAI-compatible
@@ -161,6 +291,267 @@ func (p OpenAICompatibleProvider) Complete(ctx context.Context, prompt, workspac
 		return "", fmt.Errorf("openai-compatible API returned no choices")
 	}
 	return parsed.Choices[0].Message.Content, nil
+}
+
+// openAIMessage converts a loop message to the OpenAI wire shape.
+func openAIMessage(m loop.Message) map[string]any {
+	out := map[string]any{"role": m.Role}
+	if m.Content != "" {
+		out["content"] = m.Content
+	}
+	if m.ToolCallID != "" {
+		out["tool_call_id"] = m.ToolCallID
+		// OpenAI tool messages carry the result in content.
+		if _, ok := out["content"]; !ok {
+			out["content"] = ""
+		}
+	}
+	if len(m.ToolCalls) > 0 {
+		calls := make([]map[string]any, 0, len(m.ToolCalls))
+		for _, c := range m.ToolCalls {
+			args, _ := json.Marshal(c.Arguments)
+			calls = append(calls, map[string]any{
+				"id":   c.ID,
+				"type": "function",
+				"function": map[string]any{
+					"name":      c.Name,
+					"arguments": string(args),
+				},
+			})
+		}
+		out["tool_calls"] = calls
+	}
+	return out
+}
+
+// CompleteTools sends the conversation plus tool definitions and
+// returns the model's next message, which may contain tool calls.
+func (p OpenAICompatibleProvider) CompleteTools(ctx context.Context, messages []loop.Message, tools []loop.ToolDef) (loop.Message, loop.Usage, error) {
+	base := strings.TrimSuffix(p.BaseURL, "/")
+	if base == "" {
+		base = "https://api.openai.com/v1"
+	}
+	msgs := make([]map[string]any, 0, len(messages))
+	for _, m := range messages {
+		msgs = append(msgs, openAIMessage(m))
+	}
+	toolDefs := make([]map[string]any, 0, len(tools))
+	for _, t := range tools {
+		toolDefs = append(toolDefs, map[string]any{
+			"type": "function",
+			"function": map[string]any{
+				"name":        t.Name,
+				"description": t.Description,
+				"parameters":  t.Parameters,
+			},
+		})
+	}
+	body, _ := json.Marshal(map[string]any{
+		"model":    p.Model,
+		"messages": msgs,
+		"tools":    toolDefs,
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return loop.Message{}, loop.Usage{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if p.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+p.APIKey)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return loop.Message{}, loop.Usage{}, err
+	}
+	defer resp.Body.Close()
+	var parsed struct {
+		Choices []struct {
+			Message struct {
+				Content   string `json:"content"`
+				ToolCalls []struct {
+					ID       string `json:"id"`
+					Function struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					} `json:"function"`
+				} `json:"tool_calls"`
+			} `json:"message"`
+		} `json:"choices"`
+		Usage struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+		} `json:"usage"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return loop.Message{}, loop.Usage{}, err
+	}
+	if parsed.Error != nil {
+		return loop.Message{}, loop.Usage{}, fmt.Errorf("openai-compatible API error: %s", parsed.Error.Message)
+	}
+	if len(parsed.Choices) == 0 {
+		return loop.Message{}, loop.Usage{}, fmt.Errorf("openai-compatible API returned no choices")
+	}
+	msg := parsed.Choices[0].Message
+	out := loop.Message{Role: "assistant", Content: msg.Content}
+	for _, tc := range msg.ToolCalls {
+		var args map[string]any
+		if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
+			return loop.Message{}, loop.Usage{}, fmt.Errorf("bad tool arguments from model for %s: %w", tc.Function.Name, err)
+		}
+		out.ToolCalls = append(out.ToolCalls, loop.ToolCall{ID: tc.ID, Name: tc.Function.Name, Arguments: args})
+	}
+	return out, loop.Usage{InputTokens: parsed.Usage.PromptTokens, OutputTokens: parsed.Usage.CompletionTokens}, nil
+}
+
+// readSSE reads a server-sent-events body, calling fn for each
+// (event, data) pair. The "[DONE]" sentinel ends the stream.
+func readSSE(r io.Reader, fn func(event string, data []byte) error) error {
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	var event string
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			event = ""
+			continue
+		}
+		if strings.HasPrefix(line, "event:") {
+			event = strings.TrimSpace(line[len("event:"):])
+			continue
+		}
+		if strings.HasPrefix(line, "data:") {
+			data := strings.TrimSpace(line[len("data:"):])
+			if data == "[DONE]" {
+				return nil
+			}
+			if err := fn(event, []byte(data)); err != nil {
+				return err
+			}
+		}
+	}
+	return scanner.Err()
+}
+
+// StreamTools is the streaming variant of CompleteTools for
+// OpenAI-compatible endpoints: text deltas flow to onToken as they
+// arrive, and tool calls are accumulated by index and returned
+// whole at the end of the step.
+func (p OpenAICompatibleProvider) StreamTools(ctx context.Context, messages []loop.Message, tools []loop.ToolDef, onToken func(string)) (loop.Message, loop.Usage, error) {
+	base := strings.TrimSuffix(p.BaseURL, "/")
+	if base == "" {
+		base = "https://api.openai.com/v1"
+	}
+	msgs := make([]map[string]any, 0, len(messages))
+	for _, m := range messages {
+		msgs = append(msgs, openAIMessage(m))
+	}
+	toolDefs := make([]map[string]any, 0, len(tools))
+	for _, t := range tools {
+		toolDefs = append(toolDefs, map[string]any{
+			"type": "function",
+			"function": map[string]any{
+				"name":        t.Name,
+				"description": t.Description,
+				"parameters":  t.Parameters,
+			},
+		})
+	}
+	body, _ := json.Marshal(map[string]any{
+		"model":    p.Model,
+		"messages": msgs,
+		"tools":    toolDefs,
+		"stream":   true,
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return loop.Message{}, loop.Usage{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if p.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+p.APIKey)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return loop.Message{}, loop.Usage{}, err
+	}
+	defer resp.Body.Close()
+	out := loop.Message{Role: "assistant"}
+	var usage loop.Usage
+	type partialCall struct {
+		id   string
+		name string
+		args strings.Builder
+	}
+	calls := map[int]*partialCall{}
+	err = readSSE(resp.Body, func(_ string, data []byte) error {
+		var chunk struct {
+			Choices []struct {
+				Delta struct {
+					Content   string `json:"content"`
+					ToolCalls []struct {
+						Index    int    `json:"index"`
+						ID       string `json:"id"`
+						Function struct {
+							Name      string `json:"name"`
+							Arguments string `json:"arguments"`
+						} `json:"function"`
+					} `json:"tool_calls"`
+				} `json:"delta"`
+			} `json:"choices"`
+			Usage *struct {
+				PromptTokens     int `json:"prompt_tokens"`
+				CompletionTokens int `json:"completion_tokens"`
+			} `json:"usage"`
+		}
+		if err := json.Unmarshal(data, &chunk); err != nil {
+			return err
+		}
+		if chunk.Usage != nil {
+			usage.InputTokens = chunk.Usage.PromptTokens
+			usage.OutputTokens = chunk.Usage.CompletionTokens
+		}
+		for _, c := range chunk.Choices {
+			if c.Delta.Content != "" {
+				out.Content += c.Delta.Content
+				if onToken != nil {
+					onToken(c.Delta.Content)
+				}
+			}
+			for _, tc := range c.Delta.ToolCalls {
+				partial, ok := calls[tc.Index]
+				if !ok {
+					partial = &partialCall{}
+					calls[tc.Index] = partial
+				}
+				if tc.ID != "" {
+					partial.id = tc.ID
+				}
+				if tc.Function.Name != "" {
+					partial.name = tc.Function.Name
+				}
+				partial.args.WriteString(tc.Function.Arguments)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return loop.Message{}, loop.Usage{}, err
+	}
+	for i := 0; i < len(calls); i++ {
+		partial := calls[i]
+		if partial == nil {
+			continue
+		}
+		var args map[string]any
+		if err := json.Unmarshal([]byte(partial.args.String()), &args); err != nil {
+			return loop.Message{}, loop.Usage{}, fmt.Errorf("bad streamed tool arguments for %s: %w", partial.name, err)
+		}
+		out.ToolCalls = append(out.ToolCalls, loop.ToolCall{ID: partial.id, Name: partial.name, Arguments: args})
+	}
+	return out, usage, nil
 }
 
 // AnthropicProvider calls the Claude Messages API. Untested live
@@ -228,13 +619,292 @@ func (p AnthropicProvider) Complete(ctx context.Context, prompt, workspaceContex
 	return out.String(), nil
 }
 
+// anthropicMessage converts a loop message to the Anthropic wire
+// shape. Tool results become tool_result content blocks; assistant
+// tool calls become tool_use blocks.
+func anthropicMessage(m loop.Message) map[string]any {
+	role := m.Role
+	if role == "tool" {
+		role = "user"
+	}
+	content := []map[string]any{}
+	if m.Role == "tool" {
+		content = append(content, map[string]any{
+			"type":        "tool_result",
+			"tool_use_id": m.ToolCallID,
+			"content":     m.Content,
+		})
+		return map[string]any{"role": role, "content": content}
+	}
+	if m.Content != "" {
+		content = append(content, map[string]any{"type": "text", "text": m.Content})
+	}
+	for _, tc := range m.ToolCalls {
+		content = append(content, map[string]any{
+			"type":  "tool_use",
+			"id":    tc.ID,
+			"name":  tc.Name,
+			"input": tc.Arguments,
+		})
+	}
+	return map[string]any{"role": role, "content": content}
+}
+
+// CompleteTools sends the conversation plus tool definitions to the
+// Anthropic Messages API and returns the model's next message.
+func (p AnthropicProvider) CompleteTools(ctx context.Context, messages []loop.Message, tools []loop.ToolDef) (loop.Message, loop.Usage, error) {
+	if p.APIKey == "" {
+		return loop.Message{}, loop.Usage{}, fmt.Errorf("anthropic provider needs ANTHROPIC_API_KEY (or config.api_key)")
+	}
+	msgs := make([]map[string]any, 0, len(messages))
+	for _, m := range messages {
+		msgs = append(msgs, anthropicMessage(m))
+	}
+	toolDefs := make([]map[string]any, 0, len(tools))
+	for _, t := range tools {
+		toolDefs = append(toolDefs, map[string]any{
+			"name":         t.Name,
+			"description":  t.Description,
+			"input_schema": t.Parameters,
+		})
+	}
+	body, _ := json.Marshal(map[string]any{
+		"model":      p.Model,
+		"max_tokens": 4096,
+		"tools":      toolDefs,
+		"messages":   msgs,
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.endpoint(), bytes.NewReader(body))
+	if err != nil {
+		return loop.Message{}, loop.Usage{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-api-key", p.APIKey)
+	req.Header.Set("anthropic-version", "2023-06-01")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return loop.Message{}, loop.Usage{}, err
+	}
+	defer resp.Body.Close()
+	var parsed struct {
+		Content []struct {
+			Type  string         `json:"type"`
+			Text  string         `json:"text"`
+			ID    string         `json:"id"`
+			Name  string         `json:"name"`
+			Input map[string]any `json:"input"`
+		} `json:"content"`
+		Usage struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+		} `json:"usage"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return loop.Message{}, loop.Usage{}, err
+	}
+	if parsed.Error != nil {
+		return loop.Message{}, loop.Usage{}, fmt.Errorf("anthropic API error: %s", parsed.Error.Message)
+	}
+	out := loop.Message{Role: "assistant"}
+	for _, c := range parsed.Content {
+		switch c.Type {
+		case "text":
+			out.Content += c.Text
+		case "tool_use":
+			out.ToolCalls = append(out.ToolCalls, loop.ToolCall{ID: c.ID, Name: c.Name, Arguments: c.Input})
+		}
+	}
+	return out, loop.Usage{InputTokens: parsed.Usage.InputTokens, OutputTokens: parsed.Usage.OutputTokens}, nil
+}
+
+// StreamTools is the streaming variant of CompleteTools for the
+// Anthropic Messages API: text deltas flow to onToken as they
+// arrive, tool_use input JSON is accumulated from
+// input_json_delta events and parsed at content_block_stop.
+func (p AnthropicProvider) StreamTools(ctx context.Context, messages []loop.Message, tools []loop.ToolDef, onToken func(string)) (loop.Message, loop.Usage, error) {
+	if p.APIKey == "" {
+		return loop.Message{}, loop.Usage{}, fmt.Errorf("anthropic provider needs ANTHROPIC_API_KEY (or config.api_key)")
+	}
+	msgs := make([]map[string]any, 0, len(messages))
+	for _, m := range messages {
+		msgs = append(msgs, anthropicMessage(m))
+	}
+	toolDefs := make([]map[string]any, 0, len(tools))
+	for _, t := range tools {
+		toolDefs = append(toolDefs, map[string]any{
+			"name":         t.Name,
+			"description":  t.Description,
+			"input_schema": t.Parameters,
+		})
+	}
+	body, _ := json.Marshal(map[string]any{
+		"model":      p.Model,
+		"max_tokens": 4096,
+		"tools":      toolDefs,
+		"messages":   msgs,
+		"stream":     true,
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.endpoint(), bytes.NewReader(body))
+	if err != nil {
+		return loop.Message{}, loop.Usage{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-api-key", p.APIKey)
+	req.Header.Set("anthropic-version", "2023-06-01")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return loop.Message{}, loop.Usage{}, err
+	}
+	defer resp.Body.Close()
+	out := loop.Message{Role: "assistant"}
+	var usage loop.Usage
+	var cur *loop.ToolCall
+	var curArgs strings.Builder
+	err = readSSE(resp.Body, func(event string, data []byte) error {
+		var ev struct {
+			Type string `json:"type"`
+			// content_block_start
+			ContentBlock struct {
+				Type  string         `json:"type"`
+				ID    string         `json:"id"`
+				Name  string         `json:"name"`
+				Input map[string]any `json:"input"`
+			} `json:"content_block"`
+			// content_block_delta
+			Delta struct {
+				Type        string `json:"type"`
+				Text        string `json:"text"`
+				PartialJSON string `json:"partial_json"`
+			} `json:"delta"`
+			// message_delta
+			Usage *struct {
+				InputTokens  int `json:"input_tokens"`
+				OutputTokens int `json:"output_tokens"`
+			} `json:"usage"`
+		}
+		if err := json.Unmarshal(data, &ev); err != nil {
+			return err
+		}
+		switch ev.Type {
+		case "content_block_start":
+			if ev.ContentBlock.Type == "tool_use" {
+				cur = &loop.ToolCall{ID: ev.ContentBlock.ID, Name: ev.ContentBlock.Name}
+				curArgs.Reset()
+			}
+		case "content_block_delta":
+			switch ev.Delta.Type {
+			case "text_delta":
+				out.Content += ev.Delta.Text
+				if onToken != nil {
+					onToken(ev.Delta.Text)
+				}
+			case "input_json_delta":
+				curArgs.WriteString(ev.Delta.PartialJSON)
+			}
+		case "content_block_stop":
+			if cur != nil {
+				var args map[string]any
+				if s := curArgs.String(); s != "" {
+					if err := json.Unmarshal([]byte(s), &args); err != nil {
+						return fmt.Errorf("bad streamed tool arguments for %s: %w", cur.Name, err)
+					}
+				}
+				cur.Arguments = args
+				out.ToolCalls = append(out.ToolCalls, *cur)
+				cur = nil
+			}
+		case "message_delta":
+			if ev.Usage != nil {
+				usage.InputTokens = ev.Usage.InputTokens
+				usage.OutputTokens = ev.Usage.OutputTokens
+			}
+		}
+		_ = event
+		return nil
+	})
+	if err != nil {
+		return loop.Message{}, loop.Usage{}, err
+	}
+	return out, usage, nil
+}
+
 // SubAgent is one background agent, like agy's /agent tasks.
 type SubAgent struct {
-	ID     string
-	Task   string
-	Status string // running | done | failed
-	Result string
-	done   chan struct{}
+	ID       string
+	Task     string
+	Status   string // running | done | failed
+	Result   string
+	Started  string
+	Finished string
+	done     chan struct{}
+}
+
+// SubagentRecord is the on-disk form of a finished subagent, so
+// /agents still shows work from earlier runs after a restart.
+type SubagentRecord struct {
+	ID       string `json:"id"`
+	Task     string `json:"task"`
+	Status   string `json:"status"`
+	Result   string `json:"result"`
+	Started  string `json:"started"`
+	Finished string `json:"finished"`
+}
+
+func subagentsDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".route-x", "subagents")
+}
+
+// persistSubagent writes one finished subagent to disk.
+func (a *Agent) persistSubagent(sa *SubAgent) {
+	_ = a
+	dir := subagentsDir()
+	if dir == "" {
+		return
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
+	data, _ := json.Marshal(SubagentRecord{
+		ID: sa.ID, Task: sa.Task, Status: sa.Status, Result: sa.Result,
+		Started: sa.Started, Finished: sa.Finished,
+	})
+	_ = os.WriteFile(filepath.Join(dir, sa.ID+".json"), data, 0o644)
+}
+
+// LoadPersistedSubagents reads finished subagents from earlier
+// runs, newest first. Missing directory means none yet.
+func (a *Agent) LoadPersistedSubagents() []SubagentRecord {
+	_ = a
+	dir := subagentsDir()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var out []SubagentRecord
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			continue
+		}
+		var rec SubagentRecord
+		if err := json.Unmarshal(data, &rec); err != nil {
+			continue
+		}
+		out = append(out, rec)
+	}
+	// Newest first by finished time (ISO timestamps sort).
+	sort.Slice(out, func(i, j int) bool { return out[i].Finished > out[j].Finished })
+	return out
 }
 
 // Agent holds the runtime state for one Route-X run.
@@ -243,6 +913,26 @@ type Agent struct {
 	Workdir  string
 	Approve  tools.ApproveFunc
 	LastDiff string
+	// LastUsage is the token accounting of the most recent
+	// agentic run (RunAgent). Zero when the run did not use a
+	// tool-calling provider.
+	LastUsage loop.Usage
+	// TotalUsage accumulates every agentic run in this process,
+	// for /usage and cost estimates.
+	TotalUsage loop.Usage
+	// ToolProviderOverride, when set, replaces provider() for the
+	// agentic loop. Production leaves it nil; tests inject a
+	// scripted provider here so RunAgent can be tested without
+	// a live API key.
+	ToolProviderOverride loop.ToolProvider
+	// ProviderOverride, when set, replaces provider() for plain
+	// completions (Compact). Tests inject a scripted provider.
+	ProviderOverride Provider
+	// LastCheckpointID is the id of the checkpoint created before
+	// the first write/edit of this agent's lifetime, or "" when
+	// no checkpoint was created (or needed).
+	LastCheckpointID string
+	checkpointDone   bool
 
 	mu        sync.Mutex
 	subagents map[string]*SubAgent
@@ -257,6 +947,9 @@ func New(cfg config.Config, workdir string, approve tools.ApproveFunc) *Agent {
 // provider picks the active provider. Keys come from the
 // per-provider env var first, then config.api_key.
 func (a *Agent) provider() Provider {
+	if a.ProviderOverride != nil {
+		return a.ProviderOverride
+	}
 	key := config.EnvAPIKey(a.Config.Provider)
 	if key == "" {
 		key = a.Config.APIKey
@@ -315,6 +1008,16 @@ func (a *Agent) workspaceContext() string {
 	}
 	if mem := memory.Read("MEMORY.md"); mem != "" {
 		ctx += "\nPersistent memory:\n" + mem
+	}
+	if plugs := skills.LoadPlugins(a.Workdir); len(plugs) > 0 {
+		ctx += "\nPlugins (extra commands, follow their instructions when asked):\n"
+		for _, p := range plugs {
+			first := p.Content
+			if i := strings.Index(first, "\n"); i >= 0 {
+				first = first[:i]
+			}
+			ctx += "- " + p.Name + ": " + strings.TrimSpace(first) + "\n"
+		}
 	}
 	return ctx
 }
@@ -467,6 +1170,230 @@ func extractFile(prompt string) string {
 	return fileToken.FindString(prompt)
 }
 
+// ToolDefs is the tool registry the model may call in the
+// agentic loop: read, search, list, write, edit, run.
+func ToolDefs() []loop.ToolDef {
+	str := map[string]any{"type": "string"}
+	return []loop.ToolDef{
+		{Name: "read", Description: "Read a file and return its contents.",
+			Parameters: loop.Schema(map[string]any{"path": str}, "path")},
+		{Name: "search", Description: "Search for a text pattern (regex) in the workspace files.",
+			Parameters: loop.Schema(map[string]any{"pattern": str}, "pattern")},
+		{Name: "list", Description: "List files in the workspace (first 50).",
+			Parameters: loop.Schema(map[string]any{})},
+		{Name: "write", Description: "Create or overwrite a file with the given content. Shows a diff and follows the approval mode.",
+			Parameters: loop.Schema(map[string]any{"path": str, "content": str}, "path", "content")},
+		{Name: "edit", Description: "Replace one exact piece of text (old_text) in a file with new_text. Prefer this over rewriting a whole file.",
+			Parameters: loop.Schema(map[string]any{"path": str, "old_text": str, "new_text": str}, "path", "old_text", "new_text")},
+		{Name: "run", Description: "Run a shell command in the workspace. Dangerous commands are blocked by the sandbox and deny list.",
+			Parameters: loop.Schema(map[string]any{"command": str}, "command")},
+	}
+}
+
+// toolProvider returns the active tool-calling provider, or nil
+// when the active provider cannot call tools (local provider).
+func (a *Agent) toolProvider() loop.ToolProvider {
+	if a.ToolProviderOverride != nil {
+		return a.ToolProviderOverride
+	}
+	switch p := a.provider().(type) {
+	case GeminiProvider:
+		return p
+	case OpenAICompatibleProvider:
+		return p
+	case AnthropicProvider:
+		return p
+	}
+	return nil
+}
+
+// ensureCheckpoint snapshots the workspace once per agent
+// lifetime, before the first write or edit, so /checkpoint can
+// undo the run. A failed snapshot never blocks the task.
+func (a *Agent) ensureCheckpoint() {
+	if a.checkpointDone {
+		return
+	}
+	a.checkpointDone = true
+	if id, err := checkpoint.Create(a.Workdir); err == nil {
+		a.LastCheckpointID = id
+	}
+}
+
+// ExecuteTool runs one model-requested tool call under the same
+// sandbox and approval gates as the keyword dispatch. It never
+// bypasses CanWrite, CanRun, or the approval gate.
+func (a *Agent) ExecuteTool(ctx context.Context, call loop.ToolCall) (string, error) {
+	_ = ctx
+	switch call.Name {
+	case "read":
+		path, ok := loop.StrArg(call.Arguments, "path")
+		if !ok {
+			return "", fmt.Errorf("read needs a path argument")
+		}
+		content, err := tools.ReadFile(path)
+		if err != nil {
+			return "", err
+		}
+		return content, nil
+	case "search":
+		pattern, ok := loop.StrArg(call.Arguments, "pattern")
+		if !ok {
+			return "", fmt.Errorf("search needs a pattern argument")
+		}
+		matches, err := tools.Search(a.Workdir, pattern)
+		if err != nil {
+			return "", err
+		}
+		if len(matches) == 0 {
+			return fmt.Sprintf("No matches for %q.", pattern), nil
+		}
+		var b strings.Builder
+		for _, m := range matches {
+			fmt.Fprintf(&b, "%s:%d: %s\n", m.File, m.Line, m.Text)
+		}
+		return b.String(), nil
+	case "list":
+		files := tools.ListFiles(a.Workdir, 50)
+		return strings.Join(files, "\n"), nil
+	case "write":
+		path, ok := loop.StrArg(call.Arguments, "path")
+		if !ok {
+			return "", fmt.Errorf("write needs a path argument")
+		}
+		content, ok := loop.StrArg(call.Arguments, "content")
+		if !ok {
+			return "", fmt.Errorf("write needs a content argument")
+		}
+		if ok, reason := a.CanWrite(path); !ok {
+			return "", fmt.Errorf("write blocked: %s", reason)
+		}
+		a.ensureCheckpoint()
+		diff, written, err := tools.WriteFile(path, content, a.Config.Mode, a.Approve)
+		if err != nil {
+			return "", err
+		}
+		a.LastDiff = diff
+		if a.Config.Mode == "plan" {
+			return fmt.Sprintf("Plan mode — would write %s, not written:\n%s", path, diff), nil
+		}
+		if !written {
+			return fmt.Sprintf("Write rejected, diff was:\n%s", diff), nil
+		}
+		return fmt.Sprintf("Wrote %s:\n%s", path, diff), nil
+	case "edit":
+		path, ok := loop.StrArg(call.Arguments, "path")
+		if !ok {
+			return "", fmt.Errorf("edit needs a path argument")
+		}
+		oldText, ok := loop.StrArg(call.Arguments, "old_text")
+		if !ok {
+			return "", fmt.Errorf("edit needs an old_text argument")
+		}
+		newText, ok := loop.StrArg(call.Arguments, "new_text")
+		if !ok {
+			return "", fmt.Errorf("edit needs a new_text argument")
+		}
+		if ok, reason := a.CanWrite(path); !ok {
+			return "", fmt.Errorf("edit blocked: %s", reason)
+		}
+		a.ensureCheckpoint()
+		diff, written, err := tools.EditFile(path, oldText, newText, a.Config.Mode, a.Approve)
+		if err != nil {
+			return "", err
+		}
+		a.LastDiff = diff
+		if a.Config.Mode == "plan" {
+			return fmt.Sprintf("Plan mode — would edit %s, not written:\n%s", path, diff), nil
+		}
+		if !written {
+			return fmt.Sprintf("Edit rejected, diff was:\n%s", diff), nil
+		}
+		return fmt.Sprintf("Edited %s:\n%s", path, diff), nil
+	case "run":
+		cmd, ok := loop.StrArg(call.Arguments, "command")
+		if !ok {
+			return "", fmt.Errorf("run needs a command argument")
+		}
+		if ok, reason := a.CanRun(cmd); !ok {
+			return "", fmt.Errorf("command blocked: %s", reason)
+		}
+		approve := a.Approve
+		if a.IsAllowed(cmd) {
+			approve = tools.AutoApprove
+		}
+		out, err := tools.RunCommand(cmd, a.Config.Mode, approve)
+		if err != nil {
+			return out, err
+		}
+		return out, nil
+	}
+	return "", fmt.Errorf("unknown tool %q", call.Name)
+}
+
+// HasToolProvider reports whether the active provider can call
+// tools (gemini / openai / anthropic / ollama). The local provider
+// cannot; the caller falls back to the keyword dispatch in Run.
+func (a *Agent) HasToolProvider() bool { return a.toolProvider() != nil }
+
+// RunAgent handles one user prompt with the agentic loop: the
+// model drives tools until it answers. It returns an error when
+// the active provider cannot call tools (local provider) — the
+// caller then falls back to the keyword dispatch in Run.
+func (a *Agent) RunAgent(ctx context.Context, prompt string, onEvent func(loop.Event)) (string, error) {
+	provider := a.toolProvider()
+	if provider == nil {
+		return "", fmt.Errorf("provider %q cannot call tools; use the keyword dispatch", a.Config.Provider)
+	}
+	system := "You are Route-X, a terminal coding agent. " + a.workspaceContext() +
+		"\nUse the tools to inspect and change the workspace. " +
+		"When a task is done, answer with a short summary. " +
+		"Never claim a file was changed or a command passed unless a tool result proves it."
+	messages := []loop.Message{
+		{Role: "user", Content: system + "\n\nUser request:\n" + prompt},
+	}
+	answer, usage, err := loop.Run(ctx, provider, messages, ToolDefs(), a.ExecuteTool, loop.DefaultMaxSteps, onEvent)
+	if err != nil {
+		return "", err
+	}
+	a.LastUsage = usage
+	a.TotalUsage.InputTokens += usage.InputTokens
+	a.TotalUsage.OutputTokens += usage.OutputTokens
+	return answer, nil
+}
+
+// Compact replaces a long session history with a short summary,
+// like OpenCode's /compact: the provider summarises the
+// conversation into objectives, decisions and next steps, and the
+// summary becomes the session's first message. Sessions with
+// fewer than 4 messages have nothing worth compacting.
+func (a *Agent) Compact(ctx context.Context, sess *session.Session) error {
+	if len(sess.Messages) < 4 {
+		return fmt.Errorf("nothing to compact: only %d message(s)", len(sess.Messages))
+	}
+	var b strings.Builder
+	for _, m := range sess.Messages {
+		fmt.Fprintf(&b, "[%s] %s\n", m.Role, m.Content)
+	}
+	prompt := "Summarise this coding session into a short checkpoint " +
+		"the agent can continue from. Cover: (1) the goal, " +
+		"(2) decisions made, (3) what was changed, " +
+		"(4) what is still open. Keep it under 500 words.\n\n" + b.String()
+	summary, err := a.provider().Complete(ctx, prompt, "")
+	if err != nil {
+		return fmt.Errorf("compact failed: %w", err)
+	}
+	if strings.TrimSpace(summary) == "" {
+		return fmt.Errorf("compact failed: provider returned an empty summary")
+	}
+	sess.Messages = []session.Message{{
+		Role:    "agent",
+		Content: "Session summary (compacted from " + fmt.Sprint(len(sess.Messages)) + " messages):\n" + summary,
+		Time:    time.Now().Format(time.RFC3339),
+	}}
+	return nil
+}
+
 // Run handles one user prompt: tool dispatch first, provider second.
 // Returns the agent's reply text.
 func (a *Agent) Run(ctx context.Context, prompt string) (string, error) {
@@ -507,6 +1434,7 @@ func (a *Agent) Run(ctx context.Context, prompt string) (string, error) {
 			if ok, reason := a.CanWrite(f); !ok {
 				return "", fmt.Errorf("write blocked: %s", reason)
 			}
+			a.ensureCheckpoint()
 			content := templateFor(f)
 			diff, written, err := tools.WriteFile(f, content, a.Config.Mode, a.Approve)
 			if err != nil {
@@ -568,7 +1496,7 @@ func (a *Agent) Spawn(task string) *SubAgent {
 	a.mu.Lock()
 	a.subSeq++
 	id := fmt.Sprintf("agent-%d", a.subSeq)
-	sa := &SubAgent{ID: id, Task: task, Status: "running", done: make(chan struct{})}
+	sa := &SubAgent{ID: id, Task: task, Status: "running", Started: time.Now().Format(time.RFC3339), done: make(chan struct{})}
 	a.subagents[id] = sa
 	a.mu.Unlock()
 
@@ -583,7 +1511,6 @@ func (a *Agent) Spawn(task string) *SubAgent {
 		matches, _ := tools.Search(a.Workdir, regexp.QuoteMeta(keyword))
 		time.Sleep(200 * time.Millisecond) // keep the demo visibly async
 		a.mu.Lock()
-		defer a.mu.Unlock()
 		if len(matches) == 0 {
 			sa.Result = fmt.Sprintf("Subagent %s finished: no matches for %q.", id, keyword)
 		} else {
@@ -591,6 +1518,10 @@ func (a *Agent) Spawn(task string) *SubAgent {
 				id, len(matches), keyword, matches[0].File, matches[0].Line)
 		}
 		sa.Status = "done"
+		sa.Finished = time.Now().Format(time.RFC3339)
+		a.mu.Unlock()
+		// Persist so /agents shows it after a restart.
+		a.persistSubagent(sa)
 	}()
 	return sa
 }
