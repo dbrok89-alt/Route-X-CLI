@@ -53,11 +53,22 @@ import (
 	"route-x/internal/tools"
 )
 
-const version = "0.3.0"
+const version = "0.3.1"
 
 // stdinReader is the single shared stdin reader for the REPL and
 // for approval prompts. See runREPL for why it must be shared.
 var stdinReader = bufio.NewReader(os.Stdin)
+
+// printUsage prints the --help text. It is a separate function (instead
+// of an inline closure) so tests can call it and assert the subcommands
+// are listed — v0.3.0 shipped serve/share/cron without mentioning them
+// here, so users had no way to discover them from --help.
+func printUsage() {
+	fmt.Fprintf(os.Stderr, "Route-X %s — terminal coding agent (inspired by Antigravity CLI / agy)\n\n", version)
+	fmt.Fprintf(os.Stderr, "Usage:\n  route-x [prompt]\n  route-x -p \"prompt\" [--output json] [--mode plan]\n  route-x init\n  route-x serve [--port 8080]\n  route-x share [--provider ngrok|cloudflared|localhost.run] [--port 8080]\n  route-x cron add <name> \"<schedule>\" \"<prompt>\" | list | run | remove <name>\n  route-x --version\n\nFlags:\n")
+	flag.PrintDefaults()
+	fmt.Fprintf(os.Stderr, "\nSlash commands (interactive mode):\n  /help /model [name] /mode [name] /provider [name] /goal <task>\n  /plan <task> /agent <task> /agents /usage /skills /config\n  /resume [id] /clear /diff /exit /compact /plugins\n  /permissions /sandbox [name] /approval [name] /review /verify\n  /context /memory /remember <fact> /learn <name> /hooks /mcp\n  /checkpoint /search <word> /lint\n")
+}
 
 func main() {
 	var (
@@ -67,19 +78,14 @@ func main() {
 		output    = flag.String("output", "text", "print-mode output: text | json | stream-json")
 		model     = flag.String("model", "", "model name (default from config)")
 		mode      = flag.String("mode", "", "execution mode: default | accept-edits | auto | plan")
-		provider  = flag.String("provider", "", "provider: local | gemini | openai | anthropic | ollama")
+		provider  = flag.String("provider", "", "provider: local | gemini | openai | anthropic | ollama | intern")
 		sandbox   = flag.String("sandbox", "", "sandbox: read-only | workspace-write | danger-full-access")
 		approval  = flag.String("approval", "", "approval policy: on-request | never")
 		baseURL   = flag.String("base-url", "", "OpenAI-compatible endpoint (openai/ollama provider)")
 		showVer   = flag.Bool("version", false, "show version")
 		showVerS  = flag.Bool("v", false, "show version (short)")
 	)
-	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Route-X %s — terminal coding agent (inspired by Antigravity CLI / agy)\n\n", version)
-		fmt.Fprintf(os.Stderr, "Usage:\n  route-x [prompt]\n  route-x -p \"prompt\" [--output json] [--mode plan]\n  route-x init\n  route-x --version\n\nFlags:\n")
-		flag.PrintDefaults()
-		fmt.Fprintf(os.Stderr, "\nSlash commands (interactive mode):\n  /help /model [name] /mode [name] /provider [name] /goal <task>\n  /plan <task> /agent <task> /agents /usage /skills /config\n  /resume [id] /clear /diff /exit\n  /permissions /sandbox [name] /approval [name] /review /verify\n  /context /memory /remember <fact> /learn <name> /hooks /mcp\n")
-	}
+	flag.Usage = printUsage
 	flag.Parse()
 
 	if *showVer || *showVerS {
@@ -118,6 +124,13 @@ func main() {
 			os.Exit(2)
 		}
 		cfg.Provider = *provider
+		// Switching provider without naming a model: use that
+		// provider's default model — but only when the stored
+		// model is still the generic default, so an explicitly
+		// chosen model is never clobbered.
+		if *model == "" && cfg.Model == config.Default().Model {
+			cfg.Model = config.DefaultModelFor(*provider)
+		}
 	}
 	if *sandbox != "" {
 		if !config.ValidSandbox(*sandbox) {
@@ -600,7 +613,7 @@ func handleSlash(ag *agent.Agent, cfg *config.Config, sess *session.Session, lin
 			"  /help              show this help\n" +
 			"  /model [name]      show / set model\n" +
 			"  /mode [name]       show / set mode (default, accept-edits, auto, plan)\n" +
-			"  /provider [name]   show / set provider (local, gemini, openai, anthropic, ollama)\n" +
+			"  /provider [name]   show / set provider (local, gemini, openai, anthropic, ollama, intern)\n" +
 			"  /sandbox [name]    show / set sandbox (read-only, workspace-write, danger-full-access)\n" +
 			"  /approval [name]   show / set approval (on-request, never)\n" +
 			"  /permissions       show sandbox, approval, allow/deny lists\n" +
@@ -661,10 +674,15 @@ func handleSlash(ag *agent.Agent, cfg *config.Config, sess *session.Session, lin
 		if arg == "" {
 			fmt.Println("provider:", cfg.Provider)
 		} else if config.ValidProvider(arg) {
+			changed := cfg.Provider != arg
 			cfg.Provider = arg
 			ag.Config.Provider = arg
+			if changed && cfg.Model == config.Default().Model {
+				cfg.Model = config.DefaultModelFor(arg)
+				ag.Config.Model = cfg.Model
+			}
 			_ = config.Save(*cfg)
-			fmt.Println("provider set to", arg)
+			fmt.Println("provider set to", arg, "(model:", cfg.Model+")")
 		} else {
 			fmt.Println("invalid provider:", arg)
 		}
@@ -929,7 +947,7 @@ func handleSlash(ag *agent.Agent, cfg *config.Config, sess *session.Session, lin
 			fmt.Printf("- %s: %s\n", m.ID, m.Excerpt)
 		}
 	case "/usage":
-		fmt.Printf("model: %s\nmode: %s\nprovider: %s\nsandbox: %s\napproval: %s\nlocal provider: unlimited (offline)\ngemini provider: needs GEMINI_API_KEY\nopenai provider: needs OPENAI_API_KEY\nanthropic provider: needs ANTHROPIC_API_KEY\nollama provider: local OpenAI-compatible endpoint (default http://localhost:11434/v1)\n",
+		fmt.Printf("model: %s\nmode: %s\nprovider: %s\nsandbox: %s\napproval: %s\nlocal provider: unlimited (offline)\ngemini provider: needs GEMINI_API_KEY\nopenai provider: needs OPENAI_API_KEY\nanthropic provider: needs ANTHROPIC_API_KEY\nollama provider: local OpenAI-compatible endpoint (default http://localhost:11434/v1)\nintern provider: needs INTERN_API_KEY (Shanghai AI Lab discovery API, default model Atria-Dawn)\n",
 			cfg.Model, cfg.Mode, cfg.Provider, cfg.Sandbox, cfg.Approval)
 		fmt.Printf("last run: %d in / %d out tokens\n", ag.LastUsage.InputTokens, ag.LastUsage.OutputTokens)
 		fmt.Printf("session total: %d in / %d out tokens\n", ag.TotalUsage.InputTokens, ag.TotalUsage.OutputTokens)
