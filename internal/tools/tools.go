@@ -221,6 +221,79 @@ func WriteFile(path, content, mode string, approve ApproveFunc) (diff string, wr
 	return diff, true, nil
 }
 
+// EditFile replaces one occurrence of oldText in a file with
+// newText, showing a diff and following the same approval rules
+// as WriteFile. It prefers exact matching; when the exact text
+// is not found it retries with each line's surrounding whitespace
+// trimmed (models often get indentation slightly wrong). When
+// oldText occurs more than once, or cannot be found at all, it
+// refuses instead of guessing — a wrong edit is worse than none.
+func EditFile(path, oldText, newText, mode string, approve ApproveFunc) (diff string, written bool, err error) {
+	old, err := ReadFile(path)
+	if err != nil {
+		return "", false, err
+	}
+	if oldText == "" {
+		return "", false, fmt.Errorf("old_text must not be empty")
+	}
+	if strings.Count(old, oldText) > 1 {
+		return "", false, fmt.Errorf("old_text occurs %d times in %s — be more specific", strings.Count(old, oldText), path)
+	}
+	replacement, found := replaceOnce(old, oldText, newText)
+	if !found {
+		// Fallback: match a single line with its surrounding
+		// whitespace ignored (models often get indentation
+		// slightly wrong).
+		replacement, found = replaceOnceTrimmed(old, oldText, newText)
+	}
+	if !found {
+		return "", false, fmt.Errorf("old_text not found in %s", path)
+	}
+	diff = Diff(old, replacement)
+	if mode == "plan" {
+		return diff, false, nil
+	}
+	if mode == "default" {
+		if !approve(fmt.Sprintf("Edit %s ?\n%s", path, diff)) {
+			return diff, false, nil
+		}
+	}
+	if err := os.WriteFile(path, []byte(replacement), 0o644); err != nil {
+		return diff, false, err
+	}
+	return diff, true, nil
+}
+
+// replaceOnce replaces the first occurrence of old in s with
+// newText.
+func replaceOnce(s, old, newText string) (string, bool) {
+	i := strings.Index(s, old)
+	if i < 0 {
+		return s, false
+	}
+	return s[:i] + newText + s[i+len(old):], true
+}
+
+// replaceOnceTrimmed retries the match line by line, comparing
+// trimmed lines, and replaces the matching line with newText,
+// keeping the original line's leading whitespace. Only a
+// single-line oldText can be matched this way.
+func replaceOnceTrimmed(s, old, newText string) (string, bool) {
+	if strings.Contains(old, "\n") {
+		return s, false
+	}
+	want := strings.TrimSpace(old)
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		if strings.TrimSpace(line) == want {
+			indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+			lines[i] = indent + strings.TrimSpace(newText)
+			return strings.Join(lines, "\n"), true
+		}
+	}
+	return s, false
+}
+
 var blockedCommands = []string{
 	"rm -rf", "rm -fr", "mkfs", "dd if=", ":(){", "shutdown", "reboot",
 	"git push --force", "git push -f", "> /dev/", "chmod 777 /", "chmod -R 777 /",
