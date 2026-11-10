@@ -32,6 +32,23 @@ func TestValidModeAndProvider(t *testing.T) {
 	}
 }
 
+func TestLoadFallsBackOnInvalidSandbox(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	_ = os.MkdirAll(filepath.Join(home, ".route-x"), 0o700)
+	bad := `{"model":"m","mode":"default","provider":"local","sandbox":"yolo","approval":"always"}`
+	if err := os.WriteFile(filepath.Join(home, ".route-x", "config.json"), []byte(bad), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Sandbox != "workspace-write" || cfg.Approval != "on-request" {
+		t.Fatalf("invalid sandbox/approval not reset: %q / %q", cfg.Sandbox, cfg.Approval)
+	}
+}
+
 func TestValidSandboxAndApproval(t *testing.T) {
 	for _, s := range []string{"read-only", "workspace-write", "danger-full-access"} {
 		if !ValidSandbox(s) {
