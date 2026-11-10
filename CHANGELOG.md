@@ -1,5 +1,41 @@
 # Changelog
 
+## v0.4.0 — 2026-11-10 (semua tool OpenCode)
+
+Melengkapi daftar tool bawaan OpenCode (opencode.ai/docs/tools)
+sebagai tool yang bisa dipanggil model di agentic loop. Sebelumnya
+loop hanya punya read/search/list/write/edit/run.
+
+- **glob:** cari file pakai pola (`**/*.go`, `src/*.ts`); pola
+  `..` yang keluar workspace ditolak.
+- **apply_patch:** patch multi-file (`*** Add/Update/Delete/
+  Rename File:`); add menolak file yang sudah ada, semua path
+  harus di dalam proyek, satu approval untuk seluruh patch,
+  plan mode hanya menampilkan diff.
+- **skill:** model bisa memuat file SKILL.md sendiri.
+- **todowrite:** daftar tugas sesi (add/start/done/list/clear).
+- **question:** model bertanya ke pengguna di tengah tugas
+  (REPL interaktif, pilih nomor atau ketik jawaban); ditolak
+  di print mode.
+- **task:** delegasi ke subagent baru dan tunggu jawabannya;
+  subagent tidak boleh membuat task lagi (batas kedalaman 1).
+- **plan:** rekam rencana (langkah-langkah) ke sesi.
+- **webfetch:** ambil halaman web (HTML dibersihkan jadi teks,
+  batas 200 KiB dengan catatan terpotong); menolak host
+  privat/loopback (SSRF guard) dan skema non-http(s).
+- **websearch:** cari web, maks 5 hasil. Tanpa kunci memakai
+  DuckDuckGo (HTML endpoint); kalau `EXA_API_KEY` diset, pakai
+  API Exa.
+- **lsp:** klien LSP minimal (definition, references, hover,
+  document symbols) lewat stdio JSON-RPC; butuh server, misal
+  `gopls` di `lsp_server` config atau `ROUTE_X_LSP_COMMAND`.
+  Dites melawan server LSP palsu (Python).
+- Yang sengaja belum ada: `codesearch` semantik OpenCode (butuh
+  model embedding — tidak dipalsukan).
+- Dites: gofmt/vet/test -race 15 paket lolos, mock server per
+  tool, smoke loop end-to-end, mutation check (apply_patch,
+  glob, SSRF guard — test gagal saat pengaman dilemahkan).
+
 ## v0.3.2 — 2026-11-10 (perbaikan model placeholder)
 
 Bug yang ditemukan saat verifikasi binary v0.3.1: config dengan
