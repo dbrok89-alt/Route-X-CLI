@@ -165,13 +165,24 @@ func (p OpenAICompatibleProvider) Complete(ctx context.Context, prompt, workspac
 
 // AnthropicProvider calls the Claude Messages API. Untested live
 // without an ANTHROPIC_API_KEY; the request shape follows the
-// public Anthropic API docs.
+// public Anthropic API docs. BaseURL defaults to the real API
+// endpoint and exists so the request can be tested against a
+// local server instead of the live API.
 type AnthropicProvider struct {
-	APIKey string
-	Model  string
+	APIKey  string
+	Model   string
+	BaseURL string // default https://api.anthropic.com
 }
 
 func (p AnthropicProvider) Name() string { return "anthropic:" + p.Model }
+
+func (p AnthropicProvider) endpoint() string {
+	base := strings.TrimSuffix(p.BaseURL, "/")
+	if base == "" {
+		base = "https://api.anthropic.com"
+	}
+	return base + "/v1/messages"
+}
 
 func (p AnthropicProvider) Complete(ctx context.Context, prompt, workspaceContext string) (string, error) {
 	if p.APIKey == "" {
@@ -184,7 +195,7 @@ func (p AnthropicProvider) Complete(ctx context.Context, prompt, workspaceContex
 			{"role": "user", "content": workspaceContext + "\n\nUser request:\n" + prompt},
 		},
 	})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.anthropic.com/v1/messages", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.endpoint(), bytes.NewReader(body))
 	if err != nil {
 		return "", err
 	}
@@ -266,6 +277,9 @@ func (a *Agent) provider() Provider {
 		}
 		return OpenAICompatibleProvider{APIKey: key, Model: a.Config.Model, BaseURL: base}
 	case "anthropic":
+		// BaseURL stays empty here: config.BaseURL is the
+		// OpenAI-compatible endpoint, not an Anthropic one.
+		// endpoint() then defaults to https://api.anthropic.com.
 		return AnthropicProvider{APIKey: key, Model: a.Config.Model}
 	}
 	return LocalProvider{}
@@ -347,9 +361,14 @@ func (a *Agent) CanRun(cmd string) (bool, string) {
 
 // IsAllowed reports whether a command is on the allow list and
 // may run without asking (Codex on-request + Claude allow-list).
+// The match is exact on the trimmed command, not a substring:
+// a substring match would auto-approve a chained command such as
+// "go vet ./...; rm -rf /" just because it contains an allowed
+// entry. The deny list and the shell blocklist still apply.
 func (a *Agent) IsAllowed(cmd string) bool {
+	cmd = strings.TrimSpace(cmd)
 	for _, pat := range a.Config.Allow {
-		if pat != "" && strings.Contains(cmd, pat) {
+		if pat != "" && cmd == strings.TrimSpace(pat) {
 			return true
 		}
 	}

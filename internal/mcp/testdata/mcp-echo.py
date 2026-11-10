@@ -15,6 +15,9 @@ for line in sys.stdin:
     elif method == "tools/list":
         result = {"tools": [{"name": "echo", "description": "Echoes its input"}]}
     elif method == "tools/call":
+        if msg.get("params", {}).get("name") == "boom":
+            print(json.dumps({"jsonrpc": "2.0", "id": mid, "error": {"code": -32602, "message": "unknown tool boom"}}), flush=True)
+            continue
         args = msg.get("params", {}).get("arguments", {})
         result = {"content": [{"type": "text", "text": "echo:" + json.dumps(args)}]}
     elif method == "notifications/initialized":

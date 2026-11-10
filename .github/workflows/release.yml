@@ -28,6 +28,7 @@ jobs:
       - name: Build binaries
         run: |
           CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -o route-x-linux-amd64 .
+          CGO_ENABLED=0 GOOS=linux   GOARCH=arm64 go build -o route-x-linux-arm64 .
           CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o route-x-windows-amd64.exe .
           CGO_ENABLED=0 GOOS=darwin  GOARCH=amd64 go build -o route-x-darwin-amd64 .
           CGO_ENABLED=0 GOOS=darwin  GOARCH=arm64 go build -o route-x-darwin-arm64 .
@@ -38,6 +39,7 @@ jobs:
         with:
           files: |
             route-x-linux-amd64
+            route-x-linux-arm64
             route-x-windows-amd64.exe
             route-x-darwin-amd64
             route-x-darwin-arm64

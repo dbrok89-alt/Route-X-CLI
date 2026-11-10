@@ -41,7 +41,7 @@ import (
 	"route-x/internal/tools"
 )
 
-const version = "0.2.0"
+const version = "0.2.1"
 
 // stdinReader is the single shared stdin reader for the REPL and
 // for approval prompts. See runREPL for why it must be shared.
