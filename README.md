@@ -1,10 +1,12 @@
 # Route-X
 
-[![CI](https://github.com/arjunls/Route-X-CLI/actions/workflows/ci.yml/badge.svg)](https://github.com/arjunls/Route-X-CLI/actions/workflows/ci.yml)
+[![CI](https://github.com/dbrok89-alt/Route-X-CLI/actions/workflows/ci.yml/badge.svg)](https://github.com/dbrok89-alt/Route-X-CLI/actions/workflows/ci.yml)
 
 Route-X adalah CLI coding agent ala **Antigravity CLI (`agy`)** dari Google — ditulis ulang dari nol dalam **Go, single binary, stdlib only** (tanpa dependensi eksternal).
 
 v0.2.0 menggabungkan empat keluarga CLI: Antigravity (mode + subagent), Codex (sandbox, approval, `AGENTS.md`, `/review`), Claude Code (hooks, MCP, permissions, `/context`), dan Hermes (multi-provider, memory persisten, skill belajar, `/verify`).
+
+v0.2.1 adalah rilis stabil terbaru — audit ketat atas v0.2.0: allow list kini exact-match (bukan substring), provider OpenAI/Anthropic bisa dites dengan mock, dan `/review` dites dengan repo git asli. Lihat `CHANGELOG.md`.
 
 Bukan tiruan resmi Google, dan bukan `agy` itu sendiri. Route-X meniru arsitektur dan cara pakainya:
 
@@ -128,8 +130,11 @@ Skill adalah file Markdown biasa. Tambah file baru di `.route-x/skills/nama.md`,
 route-x/
 ├── main.go                  # flag, print mode, REPL, slash command
 ├── internal/
-│   ├── agent/agent.go       # provider local + gemini, dispatch tools, subagent
+│   ├── agent/agent.go       # provider local/gemini/openai/anthropic/ollama, dispatch tools, subagent, /review, /verify
 │   ├── config/config.go     # ~/.route-x/config.json
+│   ├── hooks/hooks.go       # lifecycle hooks SessionStart..Stop
+│   ├── mcp/mcp.go           # client MCP stdio (tools/list, tools/call)
+│   ├── memory/memory.go     # memory persisten + /learn
 │   ├── session/session.go   # simpan / resume sesi (JSON)
 │   ├── skills/skills.go     # load .route-x/skills/*.md
 │   └── tools/tools.go       # read, search, write+diff, run, approval
@@ -155,7 +160,7 @@ Repo ini publik, dengan GitHub Actions di `.github/workflows/`:
   git tag v0.1.0
   git push origin v0.1.0
   ```
-  Workflow ini mem-build binary Linux, Windows, dan macOS (amd64 + arm64), lalu membuat GitHub Release otomatis dengan binary itu sebagai lampiran. Memakai `GITHUB_TOKEN` bawaan Actions, tidak butuh secret tambahan.
+  Workflow ini mem-build 5 binary (Linux amd64+arm64, Windows amd64, macOS amd64+arm64), lalu membuat GitHub Release otomatis dengan binary itu sebagai lampiran. Memakai `GITHUB_TOKEN` bawaan Actions, tidak butuh secret tambahan.
 
 Status CI terbaru bisa dilihat di tab **Actions** di GitHub.
 
