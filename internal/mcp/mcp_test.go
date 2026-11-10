@@ -49,3 +49,22 @@ func TestConnectMissingCommandFails(t *testing.T) {
 		t.Fatal("connect to missing command should fail")
 	}
 }
+
+func TestCallToolErrorSurfaces(t *testing.T) {
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 not available")
+	}
+	script, err := filepath.Abs("testdata/mcp-echo.py")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := Connect(ServerConfig{Command: python, Args: []string{script}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if _, err := client.CallTool("boom", map[string]any{}); err == nil {
+		t.Fatal("server error must surface as an error, not an empty reply")
+	}
+}
