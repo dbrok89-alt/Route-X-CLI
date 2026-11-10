@@ -25,11 +25,12 @@ type Config struct {
 	Provider string `json:"provider"` // local | gemini | openai | anthropic | ollama | intern
 	APIKey   string `json:"api_key,omitempty"`
 	// Codex-style safety knobs (v0.2.0).
-	Sandbox  string   `json:"sandbox"`            // read-only | workspace-write | danger-full-access
-	Approval string   `json:"approval"`           // on-request | never
-	Allow    []string `json:"allow,omitempty"`    // shell patterns auto-approved
-	Deny     []string `json:"deny,omitempty"`     // shell/file patterns always blocked
-	BaseURL  string   `json:"base_url,omitempty"` // OpenAI-compatible endpoint
+	Sandbox   string   `json:"sandbox"`              // read-only | workspace-write | danger-full-access
+	Approval  string   `json:"approval"`             // on-request | never
+	Allow     []string `json:"allow,omitempty"`      // shell patterns auto-approved
+	Deny      []string `json:"deny,omitempty"`       // shell/file patterns always blocked
+	BaseURL   string   `json:"base_url,omitempty"`   // OpenAI-compatible endpoint
+	LSPServer string   `json:"lsp_server,omitempty"` // language server command for the lsp tool, e.g. "gopls"
 }
 
 // Default returns sane, offline-first defaults.
