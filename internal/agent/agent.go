@@ -25,10 +25,12 @@ import (
 	"route-x/internal/checkpoint"
 	"route-x/internal/config"
 	"route-x/internal/loop"
+	"route-x/internal/lsp"
 	"route-x/internal/memory"
 	"route-x/internal/session"
 	"route-x/internal/skills"
 	"route-x/internal/tools"
+	"route-x/internal/web"
 )
 
 // Provider generates text for a prompt, given workspace context.
@@ -908,6 +910,32 @@ func (a *Agent) LoadPersistedSubagents() []SubagentRecord {
 }
 
 // Agent holds the runtime state for one Route-X run.
+// TodoItem is one entry of the session todo list. Status is
+// pending, in_progress, or completed.
+type TodoItem struct {
+	Text   string
+	Status string
+}
+
+// renderTodos renders the session todo list for the model/user.
+func renderTodos(todos []TodoItem) string {
+	if len(todos) == 0 {
+		return "No todos."
+	}
+	var b strings.Builder
+	for i, t := range todos {
+		mark := "[ ]"
+		switch t.Status {
+		case "in_progress":
+			mark = "[~]"
+		case "completed":
+			mark = "[x]"
+		}
+		fmt.Fprintf(&b, "%d. %s %s\n", i+1, mark, t.Text)
+	}
+	return b.String()
+}
+
 type Agent struct {
 	Config   config.Config
 	Workdir  string
@@ -933,6 +961,29 @@ type Agent struct {
 	// no checkpoint was created (or needed).
 	LastCheckpointID string
 	checkpointDone   bool
+
+	// Todos is the session todo list managed by the todowrite
+	// tool (OpenCode-style).
+	Todos []TodoItem
+	// CurrentPlan holds the steps recorded by the plan tool.
+	CurrentPlan []string
+	// TaskDepth counts nested task-tool subagents: 0 is the top
+	// agent, a subagent spawned by the task tool gets 1 and may
+	// not spawn further tasks.
+	TaskDepth int
+	// QuestionFunc answers a question-tool call. Nil in print
+	// mode (questions are refused there); the REPL sets an
+	// interactive prompt that reads from stdin.
+	QuestionFunc func(question string, options []string) (string, error)
+	// WebSearcher is the searcher used by the websearch tool.
+	// When nil, one is built lazily from EXA_API_KEY.
+	WebSearcher *web.Searcher
+	// LSPCommand overrides the language server command for the
+	// lsp tool (tests set it to the fake server). Otherwise the
+	// ROUTE_X_LSP_COMMAND env var, then config.lsp_server.
+	LSPCommand string
+	lspClient  *lsp.Client
+	lspMu      sync.Mutex
 
 	mu        sync.Mutex
 	subagents map[string]*SubAgent
@@ -1206,6 +1257,26 @@ func ToolDefs() []loop.ToolDef {
 			Parameters: loop.Schema(map[string]any{"path": str, "old_text": str, "new_text": str}, "path", "old_text", "new_text")},
 		{Name: "run", Description: "Run a shell command in the workspace. Dangerous commands are blocked by the sandbox and deny list.",
 			Parameters: loop.Schema(map[string]any{"command": str}, "command")},
+		{Name: "glob", Description: "Find files by pattern, e.g. **/*.go or src/*.ts. A ** segment matches any number of directories.",
+			Parameters: loop.Schema(map[string]any{"pattern": str}, "pattern")},
+		{Name: "apply_patch", Description: "Apply a multi-file patch. Format: lines starting with '*** Add File: <path>', '*** Update File: <path>', '*** Delete File: <path>' or '*** Rename File: <old> -> <new>', followed by the file's full new content for Add/Update. Add refuses an existing file; Update/Delete/Rename need the file to exist.",
+			Parameters: loop.Schema(map[string]any{"patch": str}, "patch")},
+		{Name: "skill", Description: "Load a skill (a Markdown file in .route-x/skills/) by name and return its content.",
+			Parameters: loop.Schema(map[string]any{"name": str}, "name")},
+		{Name: "todowrite", Description: "Manage the session todo list. action: add (needs text), start (needs index), done (needs index), list, clear. Index is 1-based.",
+			Parameters: loop.Schema(map[string]any{"action": str, "text": str, "index": map[string]any{"type": "integer"}}, "action")},
+		{Name: "question", Description: "Ask the user a question in the middle of a task and wait for the answer. Only works in interactive mode; refused in print mode. options is an optional list of choices.",
+			Parameters: loop.Schema(map[string]any{"question": str, "options": map[string]any{"type": "array", "items": str}}, "question")},
+		{Name: "task", Description: "Delegate a self-contained subtask to a fresh subagent and wait for its final answer. Subagents cannot spawn further tasks.",
+			Parameters: loop.Schema(map[string]any{"prompt": str}, "prompt")},
+		{Name: "plan", Description: "Record a plan (list of steps) before executing it. The steps are returned and stay visible to you for the rest of the session.",
+			Parameters: loop.Schema(map[string]any{"steps": map[string]any{"type": "array", "items": str}}, "steps")},
+		{Name: "webfetch", Description: "Fetch a web page and return its text (HTML is stripped). Private/loopback hosts are refused.",
+			Parameters: loop.Schema(map[string]any{"url": str}, "url")},
+		{Name: "websearch", Description: "Search the web and return up to 5 results with title, URL and snippet. Uses Exa when EXA_API_KEY is set, otherwise DuckDuckGo (no key needed).",
+			Parameters: loop.Schema(map[string]any{"query": str}, "query")},
+		{Name: "lsp", Description: "Ask the configured language server: definition, references, hover, or symbols for a file position. Needs an LSP server (set lsp_server in config, e.g. gopls). line and character are 0-based.",
+			Parameters: loop.Schema(map[string]any{"operation": str, "file": str, "line": map[string]any{"type": "integer"}, "character": map[string]any{"type": "integer"}}, "operation", "file")},
 	}
 }
 
@@ -1346,8 +1417,256 @@ func (a *Agent) ExecuteTool(ctx context.Context, call loop.ToolCall) (string, er
 			return out, err
 		}
 		return out, nil
+	case "glob":
+		pattern, ok := loop.StrArg(call.Arguments, "pattern")
+		if !ok {
+			return "", fmt.Errorf("glob needs a pattern argument")
+		}
+		files, err := tools.Glob(a.Workdir, pattern)
+		if err != nil {
+			return "", err
+		}
+		if len(files) == 0 {
+			return fmt.Sprintf("No files match %q.", pattern), nil
+		}
+		return strings.Join(files, "\n"), nil
+	case "apply_patch":
+		patch, ok := loop.StrArg(call.Arguments, "patch")
+		if !ok {
+			return "", fmt.Errorf("apply_patch needs a patch argument")
+		}
+		ops, err := tools.ParsePatch(patch)
+		if err != nil {
+			return "", err
+		}
+		// Every touched path goes through the sandbox first.
+		for _, op := range ops {
+			if ok, reason := a.CanWrite(op.Path); !ok {
+				return "", fmt.Errorf("apply_patch blocked: %s", reason)
+			}
+			if op.Kind == "rename" {
+				if ok, reason := a.CanWrite(op.Dest); !ok {
+					return "", fmt.Errorf("apply_patch blocked: %s", reason)
+				}
+			}
+		}
+		a.ensureCheckpoint()
+		diff, written, err := tools.ApplyPatch(ops, a.Config.Mode, a.Approve)
+		if err != nil {
+			return "", err
+		}
+		a.LastDiff = diff
+		if a.Config.Mode == "plan" {
+			return fmt.Sprintf("Plan mode — would apply patch, not written:\n%s", diff), nil
+		}
+		if !written {
+			return fmt.Sprintf("Patch rejected, diff was:\n%s", diff), nil
+		}
+		return fmt.Sprintf("Patch applied:\n%s", diff), nil
+	case "skill":
+		name, ok := loop.StrArg(call.Arguments, "name")
+		if !ok {
+			return "", fmt.Errorf("skill needs a name argument")
+		}
+		for _, s := range skills.Load(a.Workdir) {
+			if strings.EqualFold(s.Name, name) {
+				return s.Content, nil
+			}
+		}
+		var names []string
+		for _, s := range skills.Load(a.Workdir) {
+			names = append(names, s.Name)
+		}
+		return "", fmt.Errorf("skill %q not found (available: %s)", name, strings.Join(names, ", "))
+	case "todowrite":
+		action, ok := loop.StrArg(call.Arguments, "action")
+		if !ok {
+			return "", fmt.Errorf("todowrite needs an action argument")
+		}
+		switch action {
+		case "add":
+			text, ok := loop.StrArg(call.Arguments, "text")
+			if !ok || strings.TrimSpace(text) == "" {
+				return "", fmt.Errorf("todowrite add needs a text argument")
+			}
+			a.Todos = append(a.Todos, TodoItem{Text: text, Status: "pending"})
+		case "start", "done":
+			idx, ok := loop.IntArg(call.Arguments, "index")
+			if !ok || idx < 1 || idx > len(a.Todos) {
+				return "", fmt.Errorf("todowrite %s needs an index between 1 and %d", action, len(a.Todos))
+			}
+			if action == "start" {
+				a.Todos[idx-1].Status = "in_progress"
+			} else {
+				a.Todos[idx-1].Status = "completed"
+			}
+		case "list":
+		case "clear":
+			a.Todos = nil
+		default:
+			return "", fmt.Errorf("todowrite: unknown action %q (add|start|done|list|clear)", action)
+		}
+		return renderTodos(a.Todos), nil
+	case "question":
+		if a.QuestionFunc == nil {
+			return "", fmt.Errorf("question tool is unavailable in non-interactive mode (print mode cannot ask the user)")
+		}
+		q, ok := loop.StrArg(call.Arguments, "question")
+		if !ok || strings.TrimSpace(q) == "" {
+			return "", fmt.Errorf("question needs a question argument")
+		}
+		options, _ := loop.StrListArg(call.Arguments, "options")
+		answer, err := a.QuestionFunc(q, options)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("User answered: %s", answer), nil
+	case "task":
+		if a.TaskDepth >= 1 {
+			return "", fmt.Errorf("subagents cannot spawn further tasks (max depth reached)")
+		}
+		prompt, ok := loop.StrArg(call.Arguments, "prompt")
+		if !ok || strings.TrimSpace(prompt) == "" {
+			return "", fmt.Errorf("task needs a prompt argument")
+		}
+		sub := New(a.Config, a.Workdir, a.Approve)
+		sub.TaskDepth = a.TaskDepth + 1
+		answer, err := sub.RunAgent(ctx, prompt, nil)
+		if err != nil {
+			return "", fmt.Errorf("subagent failed: %w", err)
+		}
+		return answer, nil
+	case "plan":
+		steps, ok := loop.StrListArg(call.Arguments, "steps")
+		if !ok || len(steps) == 0 {
+			return "", fmt.Errorf("plan needs a non-empty steps argument")
+		}
+		a.CurrentPlan = steps
+		var b strings.Builder
+		fmt.Fprintf(&b, "Plan recorded (%d steps):\n", len(steps))
+		for i, s := range steps {
+			fmt.Fprintf(&b, "%d. %s\n", i+1, s)
+		}
+		return b.String(), nil
+	case "webfetch":
+		u, ok := loop.StrArg(call.Arguments, "url")
+		if !ok || strings.TrimSpace(u) == "" {
+			return "", fmt.Errorf("webfetch needs a url argument")
+		}
+		return web.Fetch(u)
+	case "websearch":
+		q, ok := loop.StrArg(call.Arguments, "query")
+		if !ok || strings.TrimSpace(q) == "" {
+			return "", fmt.Errorf("websearch needs a query argument")
+		}
+		searcher := a.WebSearcher
+		if searcher == nil {
+			searcher = &web.Searcher{ExaAPIKey: os.Getenv("EXA_API_KEY")}
+		}
+		results, err := searcher.Search(ctx, q)
+		if err != nil {
+			return "", err
+		}
+		var b strings.Builder
+		for i, r := range results {
+			fmt.Fprintf(&b, "%d. %s\n   %s\n   %s\n", i+1, r.Title, r.URL, r.Snippet)
+		}
+		return b.String(), nil
+	case "lsp":
+		client, err := a.lsp()
+		if err != nil {
+			return "", err
+		}
+		op, ok := loop.StrArg(call.Arguments, "operation")
+		if !ok {
+			return "", fmt.Errorf("lsp needs an operation argument (definition|references|hover|symbols)")
+		}
+		file, ok := loop.StrArg(call.Arguments, "file")
+		if !ok {
+			return "", fmt.Errorf("lsp needs a file argument")
+		}
+		line, _ := loop.IntArg(call.Arguments, "line")
+		char, _ := loop.IntArg(call.Arguments, "character")
+		lctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		switch op {
+		case "definition":
+			locs, err := client.Definition(lctx, file, line, char)
+			if err != nil {
+				return "", err
+			}
+			return joinLocations(locs), nil
+		case "references":
+			locs, err := client.References(lctx, file, line, char)
+			if err != nil {
+				return "", err
+			}
+			return joinLocations(locs), nil
+		case "hover":
+			text, err := client.Hover(lctx, file, line, char)
+			if err != nil {
+				return "", err
+			}
+			if text == "" {
+				return "(no hover info)", nil
+			}
+			return text, nil
+		case "symbols":
+			syms, err := client.DocumentSymbol(lctx, file)
+			if err != nil {
+				return "", err
+			}
+			var b strings.Builder
+			for _, s := range syms {
+				fmt.Fprintf(&b, "%s (kind %d) line %d\n", s.Name, s.Kind, s.Line+1)
+			}
+			return b.String(), nil
+		default:
+			return "", fmt.Errorf("lsp: unknown operation %q (definition|references|hover|symbols)", op)
+		}
 	}
 	return "", fmt.Errorf("unknown tool %q", call.Name)
+}
+
+// lspCommand resolves the language server command.
+func (a *Agent) lspCommand() string {
+	if a.LSPCommand != "" {
+		return a.LSPCommand
+	}
+	if cmd := os.Getenv("ROUTE_X_LSP_COMMAND"); cmd != "" {
+		return cmd
+	}
+	return a.Config.LSPServer
+}
+
+// lsp lazily starts (and caches) the language server client.
+func (a *Agent) lsp() (*lsp.Client, error) {
+	a.lspMu.Lock()
+	defer a.lspMu.Unlock()
+	if a.lspClient != nil {
+		return a.lspClient, nil
+	}
+	cmd := a.lspCommand()
+	if strings.TrimSpace(cmd) == "" {
+		return nil, fmt.Errorf("no LSP server configured: set lsp_server in ~/.route-x/config.json (e.g. \"gopls\") or ROUTE_X_LSP_COMMAND")
+	}
+	client, err := lsp.Start(cmd, a.Workdir)
+	if err != nil {
+		return nil, err
+	}
+	a.lspClient = client
+	return client, nil
+}
+
+func joinLocations(locs []lsp.Location) string {
+	if len(locs) == 0 {
+		return "(no results)"
+	}
+	var b strings.Builder
+	for _, l := range locs {
+		fmt.Fprintln(&b, l.String())
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // HasToolProvider reports whether the active provider can call

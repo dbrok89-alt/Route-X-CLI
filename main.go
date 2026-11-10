@@ -35,6 +35,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -53,7 +54,7 @@ import (
 	"route-x/internal/tools"
 )
 
-const version = "0.3.2"
+const version = "0.4.0"
 
 // stdinReader is the single shared stdin reader for the REPL and
 // for approval prompts. See runREPL for why it must be shared.
@@ -514,6 +515,29 @@ func runPrint(ag *agent.Agent, prompt, output string) {
 }
 
 func runREPL(ag *agent.Agent, cfg config.Config, workdir string) {
+	// The question tool asks the user mid-task (OpenCode-style).
+	// A number picks the matching option; any other text is the
+	// answer itself. Reads from the shared stdinReader.
+	ag.QuestionFunc = func(question string, options []string) (string, error) {
+		fmt.Printf("\n[question] %s\n", question)
+		for i, opt := range options {
+			fmt.Printf("  %d. %s\n", i+1, opt)
+		}
+		if len(options) > 0 {
+			fmt.Print("Answer (number or your own text): ")
+		} else {
+			fmt.Print("Answer: ")
+		}
+		line, err := stdinReader.ReadString('\n')
+		if err != nil {
+			return "", err
+		}
+		line = strings.TrimSpace(line)
+		if n, err := strconv.Atoi(line); err == nil && n >= 1 && n <= len(options) {
+			return options[n-1], nil
+		}
+		return line, nil
+	}
 	fmt.Printf("Route-X %s — model %s · mode %s · provider %s · sandbox %s · approval %s\n",
 		version, cfg.Model, cfg.Mode, cfg.Provider, cfg.Sandbox, cfg.Approval)
 	fmt.Println("Type a task in plain language, or /help for slash commands. /exit to quit.")

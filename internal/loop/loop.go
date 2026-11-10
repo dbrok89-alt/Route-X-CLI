@@ -184,3 +184,42 @@ func Describe(tools []ToolDef) string {
 	}
 	return b.String()
 }
+
+// IntArg reads an integer argument (JSON numbers arrive as
+// float64). Returns false when absent or not a number.
+func IntArg(args map[string]any, name string) (int, bool) {
+	v, ok := args[name]
+	if !ok {
+		return 0, false
+	}
+	f, ok := v.(float64)
+	if !ok {
+		return 0, false
+	}
+	return int(f), true
+}
+
+// StrListArg reads a string-list argument: either a JSON array of
+// strings or a single string (treated as a one-item list).
+func StrListArg(args map[string]any, name string) ([]string, bool) {
+	v, ok := args[name]
+	if !ok {
+		return nil, false
+	}
+	if s, ok := v.(string); ok {
+		return []string{s}, true
+	}
+	arr, ok := v.([]any)
+	if !ok {
+		return nil, false
+	}
+	out := make([]string, 0, len(arr))
+	for _, item := range arr {
+		s, ok := item.(string)
+		if !ok {
+			return nil, false
+		}
+		out = append(out, s)
+	}
+	return out, true
+}

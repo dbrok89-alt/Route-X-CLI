@@ -10,7 +10,9 @@ v0.2.1 adalah audit ketat atas v0.2.0: allow list kini exact-match (bukan substr
 
 v0.3.0 menutup jurang terbesar v0.2.1: **agentic loop sungguhan**. Model kini memanggil tool (read/search/list/write/edit/run), membaca hasilnya, dan mengulang sampai tugas selesai atau batas 10 langkah, untuk provider Gemini, OpenAI, Anthropic, dan Ollama — plus streaming token, `/compact`, pelacak token/biaya, subagent persisten, plugin, `serve`/`share` (ngrok/cloudflared/localhost.run), cron, checkpoint, dan pencarian sesi.
 
-v0.3.1 adalah rilis stabil terbaru — menambah provider `intern` (Shanghai AI Lab discovery API, model default Atria-Dawn) dan memperbaiki `--help` yang di v0.3.0 belum menyebut subcommand serve/share/cron. Lihat `CHANGELOG.md`.
+v0.3.1 menambah provider `intern` (Shanghai AI Lab discovery API, model default Atria-Dawn) dan memperbaiki `--help` yang di v0.3.0 belum menyebut subcommand serve/share/cron.
+
+v0.4.0 adalah rilis stabil terbaru — melengkapi semua tool bawaan OpenCode: `glob`, `apply_patch`, `skill`, `todowrite`, `question`, `task`, `plan`, `webfetch`, `websearch`, dan `lsp` (klien LSP minimal: definition, references, hover, symbols; butuh server seperti `gopls` di `lsp_server`). `websearch` tanpa kunci memakai DuckDuckGo; kalau `EXA_API_KEY` diset, pakai Exa. `webfetch` menolak host privat/loopback (SSRF guard). Yang sengaja belum ada: `codesearch` semantik (butuh embedding) — jangan diklaim ada. Lihat `CHANGELOG.md`.
 
 v0.3.1 melengkapi `--help`: subcommand `serve`/`share`/`cron` dan slash command baru kini tercantum, dengan test regresi.
 
