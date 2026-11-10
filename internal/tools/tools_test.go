@@ -167,3 +167,98 @@ func TestListFilesRespectsLimit(t *testing.T) {
 		t.Fatalf("ListFiles limit: got %d, want 3", got)
 	}
 }
+
+func TestGlob(t *testing.T) {
+	dir := t.TempDir()
+	for _, p := range []string{"a.go", "sub/b.go", "sub/deep/c.go", "sub/d.txt", "top.md"} {
+		full := filepath.Join(dir, p)
+		_ = os.MkdirAll(filepath.Dir(full), 0o755)
+		_ = os.WriteFile(full, []byte("x"), 0o644)
+	}
+	must := func(pattern string, want ...string) {
+		t.Helper()
+		got, err := Glob(dir, pattern)
+		if err != nil {
+			t.Fatalf("Glob(%q): %v", pattern, err)
+		}
+		if len(got) != len(want) {
+			t.Fatalf("Glob(%q) = %v, want %v", pattern, got, want)
+		}
+		for i := range want {
+			if got[i] != filepath.Join(dir, want[i]) {
+				t.Fatalf("Glob(%q)[%d] = %q, want %q", pattern, i, got[i], filepath.Join(dir, want[i]))
+			}
+		}
+	}
+	must("*.go", "a.go")
+	must("**/*.go", "a.go", "sub/b.go", "sub/deep/c.go")
+	must("sub/*.go", "sub/b.go")
+	must("sub/**/*.go", "sub/b.go", "sub/deep/c.go")
+	must("*.md", "top.md")
+	must("nope/*.go")
+	if _, err := Glob(dir, "../*.go"); err == nil {
+		t.Fatal("Glob must refuse patterns escaping the workspace")
+	}
+}
+
+func TestApplyPatch(t *testing.T) {
+	dir := t.TempDir()
+	oldWd, _ := os.Getwd()
+	_ = os.Chdir(dir)
+	defer os.Chdir(oldWd)
+	_ = os.WriteFile("old.go", []byte("package main\n"), 0o644)
+	_ = os.WriteFile("gone.go", []byte("x\n"), 0o644)
+
+	patch := "*** Add File: new.go\npackage main\n\n*** Update File: old.go\npackage main\n// changed\n\n*** Delete File: gone.go\n*** Rename File: old.go -> renamed.go\n"
+	ops, err := ParsePatch(patch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ops) != 4 {
+		t.Fatalf("ops = %d, want 4", len(ops))
+	}
+	diff, written, err := ApplyPatch(ops, "auto", AutoApprove)
+	if err != nil || !written {
+		t.Fatalf("ApplyPatch: diff=%q written=%v err=%v", diff, written, err)
+	}
+	if _, err := os.Stat("new.go"); err != nil {
+		t.Fatal("new.go not created")
+	}
+	if _, err := os.Stat("renamed.go"); err != nil {
+		t.Fatal("renamed.go not created")
+	}
+	if _, err := os.Stat("gone.go"); err == nil {
+		t.Fatal("gone.go not deleted")
+	}
+	data, _ := os.ReadFile("renamed.go")
+	if string(data) != "package main\n// changed\n\n" {
+		t.Fatalf("renamed.go = %q", data)
+	}
+	// Plan mode writes nothing.
+	diff, written, err = ApplyPatch([]PatchOp{{Kind: "add", Path: "plan.go", Body: "x\n"}}, "plan", AutoApprove)
+	if err != nil || written {
+		t.Fatalf("plan ApplyPatch: written=%v err=%v", written, err)
+	}
+	if _, err := os.Stat("plan.go"); err == nil {
+		t.Fatal("plan mode wrote a file")
+	}
+	// Refusals: add existing, update missing, delete missing,
+	// rename to existing, path outside the workspace.
+	for _, bad := range []PatchOp{
+		{Kind: "add", Path: "new.go", Body: "x\n"},
+		{Kind: "update", Path: "missing.go", Body: "x\n"},
+		{Kind: "delete", Path: "missing.go"},
+		{Kind: "rename", Path: "new.go", Dest: "renamed.go"},
+		{Kind: "add", Path: "../escape.go", Body: "x\n"},
+	} {
+		if _, _, err := ApplyPatch([]PatchOp{bad}, "auto", AutoApprove); err == nil {
+			t.Fatalf("ApplyPatch(%+v) should have failed", bad)
+		}
+	}
+	if _, err := ParsePatch("*** Frobnicate File: x.go\n"); err == nil {
+		t.Fatal("ParsePatch must reject unknown markers")
+	}
+	if _, err := ParsePatch("orphan content\n"); err == nil {
+		t.Fatal("ParsePatch must reject content outside any operation")
+	}
+}
