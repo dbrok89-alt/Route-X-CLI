@@ -96,6 +96,68 @@ func TestReadFileTooLarge(t *testing.T) {
 	}
 }
 
+func TestEditFileExact(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.go")
+	_ = os.WriteFile(path, []byte("package main\n\n// TODO: fix\n"), 0o644)
+	diff, written, err := EditFile(path, "// TODO: fix", "// DONE: fixed", "auto", AutoApprove)
+	if err != nil || !written {
+		t.Fatalf("diff=%q written=%v err=%v", diff, written, err)
+	}
+	got, _ := os.ReadFile(path)
+	if !strings.Contains(string(got), "// DONE: fixed") {
+		t.Fatalf("file = %q", got)
+	}
+}
+
+func TestEditFileRefusesAmbiguous(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.txt")
+	_ = os.WriteFile(path, []byte("x\ny\nx\n"), 0o644)
+	if _, _, err := EditFile(path, "x", "z", "auto", AutoApprove); err == nil {
+		t.Fatal("ambiguous old_text should be refused")
+	}
+}
+
+func TestEditFileNotFound(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.txt")
+	_ = os.WriteFile(path, []byte("hello\n"), 0o644)
+	if _, _, err := EditFile(path, "missing", "z", "auto", AutoApprove); err == nil {
+		t.Fatal("missing old_text should be refused")
+	}
+}
+
+func TestEditFileTrimmedFallback(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.go")
+	_ = os.WriteFile(path, []byte("package main\n\n\t// TODO: fix\n"), 0o644)
+	// old_text without the tab indent: exact match fails, the
+	// whitespace-tolerant fallback must still find it.
+	_, written, err := EditFile(path, "// TODO: fix", "// DONE", "auto", AutoApprove)
+	if err != nil || !written {
+		t.Fatalf("written=%v err=%v", written, err)
+	}
+	got, _ := os.ReadFile(path)
+	if !strings.Contains(string(got), "// DONE") {
+		t.Fatalf("file = %q", got)
+	}
+}
+
+func TestEditFilePlanModeWritesNothing(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.txt")
+	_ = os.WriteFile(path, []byte("hello\n"), 0o644)
+	_, written, err := EditFile(path, "hello", "bye", "plan", AutoApprove)
+	if err != nil || written {
+		t.Fatalf("written=%v err=%v", written, err)
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != "hello\n" {
+		t.Fatalf("plan mode changed the file: %q", got)
+	}
+}
+
 func TestListFilesRespectsLimit(t *testing.T) {
 	dir := t.TempDir()
 	for i := 0; i < 10; i++ {
