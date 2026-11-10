@@ -53,7 +53,7 @@ import (
 	"route-x/internal/tools"
 )
 
-const version = "0.3.1"
+const version = "0.3.2"
 
 // stdinReader is the single shared stdin reader for the REPL and
 // for approval prompts. See runREPL for why it must be shared.
@@ -128,7 +128,7 @@ func main() {
 		// provider's default model — but only when the stored
 		// model is still the generic default, so an explicitly
 		// chosen model is never clobbered.
-		if *model == "" && cfg.Model == config.Default().Model {
+		if *model == "" && config.IsGenericModel(cfg.Model) {
 			cfg.Model = config.DefaultModelFor(*provider)
 		}
 	}
@@ -677,7 +677,7 @@ func handleSlash(ag *agent.Agent, cfg *config.Config, sess *session.Session, lin
 			changed := cfg.Provider != arg
 			cfg.Provider = arg
 			ag.Config.Provider = arg
-			if changed && cfg.Model == config.Default().Model {
+			if changed && config.IsGenericModel(cfg.Model) {
 				cfg.Model = config.DefaultModelFor(arg)
 				ag.Config.Model = cfg.Model
 			}
