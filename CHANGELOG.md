@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.3.2 — 2026-11-10 (perbaikan model placeholder)
+
+Bug yang ditemukan saat verifikasi binary v0.3.1: config dengan
+`model: "local"` (mudah ditulis tangan) dikirim ke API Intern
+apa adanya sebagai nama model. Sekarang nilai placeholder
+(kosong, `"local"`, atau default generik `gemini-2.0-flash`)
+dipetakan ke model default provider saat dipakai — untuk intern
+jadi `Atria-Dawn`. Ada test regresi untuk kasus `"local"`.
+
 ## v0.3.1 — 2026-11-10 (provider Intern + --help lengkap)
 
 - **Provider `intern` baru:** Shanghai AI Lab discovery API

@@ -125,3 +125,16 @@ func TestInternProvider(t *testing.T) {
 		t.Fatalf("intern base URL = %q", InternBaseURL)
 	}
 }
+
+func TestIsGenericModel(t *testing.T) {
+	for _, m := range []string{"", "local", "gemini-2.0-flash"} {
+		if !IsGenericModel(m) {
+			t.Fatalf("%q should be generic", m)
+		}
+	}
+	for _, m := range []string{"gpt-4o", "Atria-Dawn", "Intern-S2"} {
+		if IsGenericModel(m) {
+			t.Fatalf("%q should not be generic", m)
+		}
+	}
+}

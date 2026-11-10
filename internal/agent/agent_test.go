@@ -555,3 +555,14 @@ func TestInternProviderToolCallingViaMock(t *testing.T) {
 		t.Fatalf("answer = %q, err=%v", answer, err)
 	}
 }
+
+func TestInternProviderRemapsLocalPlaceholder(t *testing.T) {
+	// Regression: a config with model "local" (easy to write by
+	// hand) used to be sent to the Intern API as the model name.
+	cfg := config.Config{Model: "local", Provider: "intern"}
+	a := New(cfg, t.TempDir(), tools.AutoApprove)
+	p := a.provider().(OpenAICompatibleProvider)
+	if p.Model != "Atria-Dawn" {
+		t.Fatalf("model = %q, want Atria-Dawn", p.Model)
+	}
+}

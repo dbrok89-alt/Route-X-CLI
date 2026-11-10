@@ -979,16 +979,17 @@ func (a *Agent) provider() Provider {
 		// (verified live: /v1/models answers 401 invalid_api_key
 		// without a key, i.e. the OpenAI error envelope). Default
 		// model is Atria-Dawn (agentic, 512K context, text-only).
-		// A config that still holds the generic gemini default is
-		// remapped — gemini-2.0-flash is not an Intern model name,
-		// so this can never clobber a real Intern model the user
-		// chose. A custom BaseURL overrides the default endpoint.
+		// A config that still holds a placeholder model is
+		// remapped — none of "", "local" or "gemini-2.0-flash"
+		// is an Intern model name, so this can never clobber a
+		// real Intern model the user chose. A custom BaseURL
+		// overrides the default endpoint.
 		base := a.Config.BaseURL
 		if base == "" {
 			base = config.InternBaseURL
 		}
 		model := a.Config.Model
-		if model == "" || model == "gemini-2.0-flash" {
+		if config.IsGenericModel(model) {
 			model = config.DefaultModelFor("intern")
 		}
 		return OpenAICompatibleProvider{APIKey: key, Model: model, BaseURL: base}

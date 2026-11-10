@@ -133,6 +133,15 @@ func ValidProvider(p string) bool {
 	return false
 }
 
+// IsGenericModel reports whether model is a placeholder that
+// belongs to no real provider: empty, "local" (a value users
+// sometimes write by hand in config.json), or the generic
+// gemini default left by Default(). Such a value must never be
+// sent to a real API as a model name.
+func IsGenericModel(model string) bool {
+	return model == "" || model == "local" || model == Default().Model
+}
+
 // DefaultModelFor returns the default model for a provider.
 // Atria-Dawn is Intern's flagship agentic model (512K context,
 // text-only) — the natural default for a coding agent on the
