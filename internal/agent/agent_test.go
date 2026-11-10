@@ -13,6 +13,8 @@ import (
 	"testing"
 
 	"route-x/internal/config"
+	"route-x/internal/loop"
+	"route-x/internal/session"
 	"route-x/internal/tools"
 )
 
@@ -124,6 +126,277 @@ func TestOpenAICompatibleProviderWithMock(t *testing.T) {
 	}
 	if !strings.Contains(gotBody, `"mock-model"`) || !strings.Contains(gotBody, "hi") {
 		t.Fatalf("request body = %s", gotBody)
+	}
+}
+
+func TestOpenAICompleteToolsParsesToolCalls(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		data, _ := io.ReadAll(r.Body)
+		gotBody = string(data)
+		fmt.Fprint(w, `{"choices": [{"message": {"content": "", "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "read", "arguments": "{\"path\": \"a.txt\"}"}}]}}], "usage": {"prompt_tokens": 11, "completion_tokens": 7}}`)
+	}))
+	defer srv.Close()
+	p := OpenAICompatibleProvider{APIKey: "k", Model: "m", BaseURL: srv.URL}
+	msg, usage, err := p.CompleteTools(context.Background(),
+		[]loop.Message{{Role: "user", Content: "read a.txt"}},
+		[]loop.ToolDef{{Name: "read", Description: "read a file", Parameters: loop.Schema(map[string]any{"path": map[string]any{"type": "string"}}, "path")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.ToolCalls) != 1 || msg.ToolCalls[0].Name != "read" || msg.ToolCalls[0].Arguments["path"] != "a.txt" {
+		t.Fatalf("tool calls = %+v", msg.ToolCalls)
+	}
+	if usage.InputTokens != 11 || usage.OutputTokens != 7 {
+		t.Fatalf("usage = %+v", usage)
+	}
+	// The request must actually declare the tool to the model.
+	if !strings.Contains(gotBody, `"read"`) || !strings.Contains(gotBody, `"tools"`) {
+		t.Fatalf("request body did not declare tools: %s", gotBody)
+	}
+}
+
+func TestAnthropicCompleteToolsParsesToolUse(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		data, _ := io.ReadAll(r.Body)
+		gotBody = string(data)
+		fmt.Fprint(w, `{"content": [{"type": "tool_use", "id": "toolu_1", "name": "search", "input": {"pattern": "TODO"}}], "usage": {"input_tokens": 9, "output_tokens": 4}}`)
+	}))
+	defer srv.Close()
+	p := AnthropicProvider{APIKey: "k", Model: "m", BaseURL: srv.URL}
+	msg, usage, err := p.CompleteTools(context.Background(),
+		[]loop.Message{{Role: "user", Content: "find TODO"}},
+		[]loop.ToolDef{{Name: "search", Description: "search", Parameters: loop.Schema(map[string]any{"pattern": map[string]any{"type": "string"}}, "pattern")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.ToolCalls) != 1 || msg.ToolCalls[0].Name != "search" || msg.ToolCalls[0].Arguments["pattern"] != "TODO" {
+		t.Fatalf("tool calls = %+v", msg.ToolCalls)
+	}
+	if usage.InputTokens != 9 || usage.OutputTokens != 4 {
+		t.Fatalf("usage = %+v", usage)
+	}
+	if !strings.Contains(gotBody, `"input_schema"`) || !strings.Contains(gotBody, `"search"`) {
+		t.Fatalf("request body did not declare tools: %s", gotBody)
+	}
+}
+
+func TestGeminiCompleteToolsParsesFunctionCall(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		data, _ := io.ReadAll(r.Body)
+		gotBody = string(data)
+		fmt.Fprint(w, `{"candidates": [{"content": {"parts": [{"functionCall": {"name": "run", "args": {"command": "go vet ./..."}}}]}}], "usageMetadata": {"promptTokenCount": 12, "candidatesTokenCount": 6}}`)
+	}))
+	defer srv.Close()
+	p := GeminiProvider{APIKey: "k", Model: "m", BaseURL: srv.URL}
+	msg, usage, err := p.CompleteTools(context.Background(),
+		[]loop.Message{{Role: "user", Content: "vet the code"}},
+		[]loop.ToolDef{{Name: "run", Description: "run a command", Parameters: loop.Schema(map[string]any{"command": map[string]any{"type": "string"}}, "command")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.ToolCalls) != 1 || msg.ToolCalls[0].Name != "run" || msg.ToolCalls[0].Arguments["command"] != "go vet ./..." {
+		t.Fatalf("tool calls = %+v", msg.ToolCalls)
+	}
+	if usage.InputTokens != 12 || usage.OutputTokens != 6 {
+		t.Fatalf("usage = %+v", usage)
+	}
+	if !strings.Contains(gotBody, `"functionDeclarations"`) || !strings.Contains(gotBody, `"run"`) {
+		t.Fatalf("request body did not declare functions: %s", gotBody)
+	}
+}
+
+// scriptedToolProvider is a test double that returns a fixed
+// script of replies for the agentic loop.
+type scriptedToolProvider struct {
+	script []loop.Message
+}
+
+func (p *scriptedToolProvider) CompleteTools(_ context.Context, _ []loop.Message, _ []loop.ToolDef) (loop.Message, loop.Usage, error) {
+	if len(p.script) == 0 {
+		return loop.Message{}, loop.Usage{}, fmt.Errorf("script exhausted")
+	}
+	reply := p.script[0]
+	p.script = p.script[1:]
+	return reply, loop.Usage{InputTokens: 10, OutputTokens: 5}, nil
+}
+
+func TestRunAgentTwoStepRealFiles(t *testing.T) {
+	dir := t.TempDir()
+	// Production always runs with cwd == workdir (main.go sets
+	// workdir from os.Getwd), and tools resolve paths against
+	// the cwd, so the test must do the same. (Go 1.23 has no
+	// t.Chdir; restore the old cwd by hand.)
+	oldWd, _ := os.Getwd()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldWd) })
+	_ = os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hello world\n"), 0o644)
+	cfg := config.Config{Mode: "auto", Sandbox: "workspace-write", Approval: "on-request", Provider: "local"}
+	a := New(cfg, dir, tools.AutoApprove)
+	a.ToolProviderOverride = &scriptedToolProvider{script: []loop.Message{
+		{Role: "assistant", ToolCalls: []loop.ToolCall{{ID: "c1", Name: "read", Arguments: map[string]any{"path": "a.txt"}}}},
+		{Role: "assistant", ToolCalls: []loop.ToolCall{{ID: "c2", Name: "write", Arguments: map[string]any{"path": "b.txt", "content": "hello world"}}}},
+		{Role: "assistant", Content: "copied"},
+	}}
+	answer, err := a.RunAgent(context.Background(), "copy a.txt to b.txt", nil)
+	if err != nil || answer != "copied" {
+		t.Fatalf("answer = %q, err=%v", answer, err)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "b.txt"))
+	if err != nil || string(got) != "hello world" {
+		t.Fatalf("b.txt = %q, err=%v", got, err)
+	}
+	if a.LastUsage.InputTokens == 0 || a.LastUsage.OutputTokens == 0 {
+		t.Fatalf("usage not recorded: %+v", a.LastUsage)
+	}
+}
+
+func TestRunAgentRefusesDangerousCommand(t *testing.T) {
+	cfg := config.Config{Mode: "auto", Sandbox: "workspace-write", Approval: "on-request", Provider: "local"}
+	a := New(cfg, t.TempDir(), tools.AutoApprove)
+	a.ToolProviderOverride = &scriptedToolProvider{script: []loop.Message{
+		{Role: "assistant", ToolCalls: []loop.ToolCall{{ID: "c1", Name: "run", Arguments: map[string]any{"command": "go vet ./...; rm -rf /"}}}},
+		{Role: "assistant", Content: "blocked, will not run it"},
+	}}
+	answer, err := a.RunAgent(context.Background(), "vet then clean up", nil)
+	if err != nil || answer != "blocked, will not run it" {
+		t.Fatalf("answer = %q, err=%v", answer, err)
+	}
+	// The dangerous command must never have run: ExecuteTool
+	// returns the block as a tool error, which the model sees.
+}
+
+func TestExecuteToolWriteBlockedByReadOnlySandbox(t *testing.T) {
+	cfg := config.Config{Mode: "auto", Sandbox: "read-only", Approval: "on-request", Provider: "local"}
+	a := New(cfg, t.TempDir(), tools.AutoApprove)
+	_, err := a.ExecuteTool(context.Background(), loop.ToolCall{Name: "write", Arguments: map[string]any{"path": "x.txt", "content": "hi"}})
+	if err == nil || !strings.Contains(err.Error(), "blocked") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestRunAgentNoToolProviderFallsBack(t *testing.T) {
+	cfg := config.Config{Mode: "auto", Sandbox: "workspace-write", Approval: "on-request", Provider: "local"}
+	a := New(cfg, t.TempDir(), tools.AutoApprove)
+	_, err := a.RunAgent(context.Background(), "hi", nil)
+	if err == nil || !strings.Contains(err.Error(), "cannot call tools") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestOpenAIStreamToolsReassembles(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		// Text split across two chunks, then a tool call split
+		// across two chunks (arguments fragmented mid-string).
+		fmt.Fprint(w, "data: {\"choices\": [{\"delta\": {\"content\": \"read\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\": [{\"delta\": {\"content\": \"ing\"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\": [{\"delta\": {\"tool_calls\": [{\"index\": 0, \"id\": \"call_9\", \"function\": {\"name\": \"read\", \"arguments\": \"{\\\"pa\"}}]}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\": [{\"delta\": {\"tool_calls\": [{\"index\": 0, \"function\": {\"arguments\": \"th\\\": \\\"a.txt\\\"}\"}}]}}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+	p := OpenAICompatibleProvider{APIKey: "k", Model: "m", BaseURL: srv.URL}
+	var tokens []string
+	msg, _, err := p.StreamTools(context.Background(),
+		[]loop.Message{{Role: "user", Content: "read a.txt"}},
+		[]loop.ToolDef{{Name: "read"}}, func(s string) { tokens = append(tokens, s) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if msg.Content != "reading" {
+		t.Fatalf("content = %q", msg.Content)
+	}
+	if len(tokens) != 2 || tokens[0] != "read" || tokens[1] != "ing" {
+		t.Fatalf("tokens = %v", tokens)
+	}
+	if len(msg.ToolCalls) != 1 || msg.ToolCalls[0].Name != "read" || msg.ToolCalls[0].Arguments["path"] != "a.txt" {
+		t.Fatalf("tool calls = %+v", msg.ToolCalls)
+	}
+}
+
+func TestAnthropicStreamToolsReassembles(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "event: content_block_start\ndata: {\"type\": \"content_block_start\", \"content_block\": {\"type\": \"tool_use\", \"id\": \"toolu_7\", \"name\": \"search\"}}\n\n")
+		fmt.Fprint(w, "event: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"delta\": {\"type\": \"input_json_delta\", \"partial_json\": \"{\\\"pattern\\\": \\\"TO\"}}\n\n")
+		fmt.Fprint(w, "event: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"delta\": {\"type\": \"input_json_delta\", \"partial_json\": \"DO\\\"}\"}}\n\n")
+		fmt.Fprint(w, "event: content_block_stop\ndata: {\"type\": \"content_block_stop\"}\n\n")
+	}))
+	defer srv.Close()
+	p := AnthropicProvider{APIKey: "k", Model: "m", BaseURL: srv.URL}
+	msg, _, err := p.StreamTools(context.Background(),
+		[]loop.Message{{Role: "user", Content: "find TODO"}},
+		[]loop.ToolDef{{Name: "search"}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.ToolCalls) != 1 || msg.ToolCalls[0].Name != "search" || msg.ToolCalls[0].Arguments["pattern"] != "TODO" {
+		t.Fatalf("tool calls = %+v", msg.ToolCalls)
+	}
+}
+
+// scriptedProvider is a test double for plain completions.
+type scriptedProvider struct {
+	reply string
+}
+
+func (p scriptedProvider) Name() string { return "scripted" }
+func (p scriptedProvider) Complete(_ context.Context, prompt, _ string) (string, error) {
+	return p.reply + " (prompt was " + fmt.Sprint(len(prompt)) + " chars)", nil
+}
+
+func TestCompactReplacesHistory(t *testing.T) {
+	cfg := config.Config{Mode: "auto", Provider: "local"}
+	a := New(cfg, t.TempDir(), tools.AutoApprove)
+	a.ProviderOverride = scriptedProvider{reply: "Goal: copy file. Done: b.txt created. Open: none."}
+	sess := &session.Session{Messages: []session.Message{
+		{Role: "user", Content: "copy a.txt"},
+		{Role: "agent", Content: "ok"},
+		{Role: "user", Content: "and check it"},
+		{Role: "agent", Content: "checked"},
+		{Role: "user", Content: "thanks"},
+	}}
+	if err := a.Compact(context.Background(), sess); err != nil {
+		t.Fatal(err)
+	}
+	if len(sess.Messages) != 1 {
+		t.Fatalf("messages = %d", len(sess.Messages))
+	}
+	if !strings.Contains(sess.Messages[0].Content, "Goal: copy file") || !strings.Contains(sess.Messages[0].Content, "compacted from 5") {
+		t.Fatalf("summary = %q", sess.Messages[0].Content)
+	}
+}
+
+func TestCompactRefusesShortSession(t *testing.T) {
+	a := New(config.Config{}, t.TempDir(), tools.AutoApprove)
+	a.ProviderOverride = scriptedProvider{reply: "x"}
+	sess := &session.Session{Messages: []session.Message{{Role: "user", Content: "hi"}}}
+	if err := a.Compact(context.Background(), sess); err == nil {
+		t.Fatal("short session should not be compacted")
+	}
+}
+
+func TestSubagentPersistedAcrossRuns(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hello\n"), 0o644)
+	a := New(config.Config{Mode: "auto"}, dir, tools.AutoApprove)
+	sa := a.Spawn("cari hello")
+	a.WaitSubagent(sa.ID)
+	if sa.Status != "done" {
+		t.Fatalf("status = %s", sa.Status)
+	}
+	// A fresh agent (new process in real life) must see it.
+	b := New(config.Config{Mode: "auto"}, dir, tools.AutoApprove)
+	recs := b.LoadPersistedSubagents()
+	if len(recs) != 1 || recs[0].ID != sa.ID || recs[0].Status != "done" || recs[0].Result == "" {
+		t.Fatalf("records = %+v", recs)
 	}
 }
 

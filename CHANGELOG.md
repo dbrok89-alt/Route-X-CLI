@@ -1,5 +1,57 @@
 # Changelog
 
+## v0.3.0 — 2026-11-10 (agentic loop + OpenCode/ngrok/Hermes)
+
+Menutup jurang terbesar v0.2.1: model kini benar-benar menggerakkan
+tool, bukan sekadar membalas teks sekali jalan. Semua slice dites
+ketat (unit + race + mock server + smoke + mutation check).
+
+- **Agentic loop (inti):** paket baru `internal/loop` — model
+  memanggil tool, hasil tool dikembalikan ke model, ulang sampai
+  jawaban akhir atau batas 10 langkah. Error tool dikembalikan ke
+  model supaya bisa coba cara lain. Dites dengan provider scripted
+  (tugas 2 langkah baca→tulis di file asli) dan end-to-end dengan
+  mock server OpenAI (3 panggilan: read → write → jawaban).
+- **Tool calling 3 provider:** `CompleteTools` untuk OpenAI
+  (tools/tool_calls), Anthropic (tools/input_schema, tool_use/
+  tool_result), Gemini (functionDeclarations/functionCall).
+  Masing-masing dites dengan mock server yang memeriksa request
+  benar-benar mendeklarasikan tool dan parsing-nya benar.
+- **Streaming:** `StreamTools` untuk OpenAI dan Anthropic (SSE):
+  teks mengalir token demi token, tool call yang terpotong
+  dirakit ulang dari fragment (dites dengan chunk yang sengaja
+  dipotong di tengah string JSON). Gemini tetap non-streaming.
+- **Tool `edit` baru:** ganti satu potong teks (bukan tulis ulang
+  file), menolak teks ambigu (>1 kemunculan) dan teks yang tidak
+  ditemukan, fallback whitespace-tolerant. Dites termasuk mode plan.
+- **Executor tetap patuh sandbox/approval:** perintah berbahaya
+  `go vet ./...; rm -rf /` diblokir di loop (dites), tulis di
+  sandbox read-only ditolak (dites). Mutation check membuktikan
+  test keamanan gagal kalau exact-match dikembalikan ke substring.
+- **`/compact`:** ringkas sesi jadi satu checkpoint (tujuan,
+  keputusan, perubahan, yang masih terbuka); menolak sesi <4 pesan.
+- **Pelacak token/biaya:** `/usage` kini menampilkan token run
+  terakhir + total sesi + estimasi biaya USD dari harga list
+  (model tak dikenal dilaporkan "unknown", bukan harga karangan).
+- **Subagent persisten:** subagent selesai disimpan ke
+  `~/.route-x/subagents/`, `/agents` menampilkannya setelah restart.
+- **Plugin:** `.route-x/plugins/*.md` dimuat sebagai perintah
+  tambahan dan ikut dibaca model lewat konteks workspace.
+- **`serve`/`share`:** server HTTP loopback dengan bearer token
+  (`/health` terbuka, `/prompt` + `/sessions` wajib token);
+  `share` menjalankan tunnel ngrok (butuh akun), cloudflared, atau
+  localhost.run. Bind non-loopback ditolak tanpa flag eksplisit;
+  token kosong ditolak. Dites dengan httptest + smoke curl nyata.
+- **Cron:** `route-x cron add/list/run/remove`, parser cron
+  5-field (*, angka, range, list, step), tugas yang sudah jalan
+  di menit yang sama tidak diulang. Route-X bukan daemon —
+  `cron run` harus dipanggil scheduler Anda sendiri.
+- **Checkpoint:** snapshot workspace otomatis sebelum tulis/edit
+  pertama; `/checkpoint list` dan `/checkpoint restore <id>`.
+- **Pencarian sesi:** `/search <kata>` mencari di sesi tersimpan.
+- Yang masih jujur belum ada: TUI penuh, sandbox OS-level, LSP,
+  MCP server, tes live Anthropic/OpenAI/Gemini (butuh API key).
+
 ## v0.2.1 — 2026-11-10 (audit ketat, tanpa data palsu)
 
 Audit ulang v0.2.0 menemukan dan memperbaiki kelemahan nyata,

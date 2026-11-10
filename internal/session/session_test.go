@@ -36,3 +36,22 @@ func TestLoadMissingReturnsError(t *testing.T) {
 		t.Fatal("missing session should error")
 	}
 }
+
+func TestSearchFindsSession(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	_ = Save(&Session{ID: "20261110-100000", Messages: []Message{{Role: "user", Content: "fix the login bug"}}})
+	_ = Save(&Session{ID: "20261110-110000", Messages: []Message{{Role: "user", Content: "write a readme"}}})
+	matches, err := Search("login")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 1 || matches[0].ID != "20261110-100000" {
+		t.Fatalf("matches = %+v", matches)
+	}
+	if matches, _ := Search("LOGIN"); len(matches) != 1 {
+		t.Fatal("search should be case insensitive")
+	}
+	if matches, _ := Search("nothing matches this"); len(matches) != 0 {
+		t.Fatalf("matches = %+v", matches)
+	}
+}

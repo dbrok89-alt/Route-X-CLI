@@ -9,6 +9,12 @@
 // (hooks, MCP client, allow/deny permissions, /context) and Hermes
 // (multi-provider, persistent memory, auto-learned skills, /verify).
 //
+// v0.3.0 adds the missing core: a model-driven agentic loop with
+// tool calling (read/search/list/write/edit/run) for Gemini, OpenAI,
+// Anthropic and Ollama, plus /compact, token/cost tracking,
+// persistent subagents, plugins, serve/share, cron and checkpoints
+// (OpenCode / ngrok / Hermes features, ported honestly).
+//
 // Usage:
 //
 //	route-x                  # interactive REPL
@@ -27,21 +33,27 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"route-x/internal/agent"
+	"route-x/internal/checkpoint"
 	"route-x/internal/config"
+	"route-x/internal/cron"
 	"route-x/internal/hooks"
+	"route-x/internal/loop"
 	"route-x/internal/mcp"
 	"route-x/internal/memory"
+	"route-x/internal/serve"
 	"route-x/internal/session"
 	"route-x/internal/skills"
 	"route-x/internal/tools"
 )
 
-const version = "0.2.1"
+const version = "0.3.0"
 
 // stdinReader is the single shared stdin reader for the REPL and
 // for approval prompts. See runREPL for why it must be shared.
@@ -137,6 +149,24 @@ func main() {
 	}
 	ag := agent.New(cfg, workdir, approve)
 
+	// Subcommands: serve / share — expose the agent over HTTP.
+	if flag.NArg() > 0 && (flag.Arg(0) == "serve" || flag.Arg(0) == "share") {
+		if err := runServeOrShare(ag, flag.Arg(0), flag.Args()[1:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	// Subcommand: cron — scheduled agent tasks.
+	if flag.NArg() > 0 && flag.Arg(0) == "cron" {
+		if err := runCron(ag, flag.Args()[1:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if *printMode || *printLong || *oneshot {
 		prompt := strings.Join(flag.Args(), " ")
 		if prompt == "" {
@@ -221,8 +251,234 @@ func interactiveApprove(description string) bool {
 	return line == "y" || line == "yes"
 }
 
+// runPrompt is the single entry point for a user task: the
+// agentic loop when the provider can call tools, the keyword
+// dispatch otherwise (local provider). onEvent prints tool
+// progress in the REPL; print mode passes nil.
+func runPrompt(ag *agent.Agent, prompt string, onEvent func(loop.Event)) (string, error) {
+	if ag.HasToolProvider() {
+		return ag.RunAgent(context.Background(), prompt, onEvent)
+	}
+	return ag.Run(context.Background(), prompt)
+}
+
+// replEvent renders agentic-loop progress in the REPL.
+func replEvent(e loop.Event) {
+	switch e.Kind {
+	case "tool_start":
+		fmt.Printf("  ▸ %s\n", e.Tool)
+	case "tool_result":
+		if e.IsError {
+			fmt.Printf("    ✗ %s\n", firstLine(e.Text))
+		}
+	case "done":
+		fmt.Printf("  [used %d in / %d out tokens]\n", e.Usage.InputTokens, e.Usage.OutputTokens)
+	}
+}
+
+func firstLine(s string) string {
+	if i := strings.Index(s, "\n"); i >= 0 {
+		return s[:i]
+	}
+	return s
+}
+
+// runServeOrShare implements `route-x serve` and `route-x share`.
+// serve exposes the agent on loopback HTTP with a bearer token
+// (printed once, keep it secret). share additionally starts a
+// tunnel (ngrok by default) so the server is reachable publicly.
+// Anyone holding the public URL and the token can ask the agent
+// to read files and run commands — that is printed as a warning.
+func runServeOrShare(ag *agent.Agent, cmd string, args []string) error {
+	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
+	port := fs.Int("port", 8080, "local port to serve on")
+	tunnelProvider := fs.String("provider", "ngrok", "tunnel provider for share: ngrok | cloudflared | localhost.run")
+	allowPublic := fs.Bool("allow-public-bind", false, "allow binding a non-loopback address (dangerous)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	token, err := serve.NewToken()
+	if err != nil {
+		return fmt.Errorf("could not create serve token: %w", err)
+	}
+	addr := fmt.Sprintf("127.0.0.1:%d", *port)
+	srv, err := serve.New(addr, token, func(prompt string) (string, error) {
+		return runPrompt(ag, prompt, nil)
+	}, *allowPublic)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Serving on http://%s\n", addr)
+	fmt.Printf("Bearer token (shown once — keep it secret): %s\n", token)
+	fmt.Println("Send prompts with: curl -H \"Authorization: Bearer <token>\" -d '{\"prompt\": \"...\"}' http://127.0.0.1:" + fmt.Sprint(*port) + "/prompt")
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	if cmd == "serve" {
+		go func() {
+			if err := srv.ListenAndServe(); err != nil {
+				fmt.Fprintln(os.Stderr, "serve:", err)
+				os.Exit(1)
+			}
+		}()
+		fmt.Println("Press Ctrl-C to stop.")
+		<-sigCh
+		return nil
+	}
+
+	// share: start the server, then the tunnel.
+	go func() {
+		_ = srv.ListenAndServe()
+	}()
+	time.Sleep(300 * time.Millisecond) // let the server bind
+	spec := serve.TunnelSpec{Provider: *tunnelProvider, Port: *port}
+	tunnel, err := spec.Command()
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Starting tunnel (%s)...\n", *tunnelProvider)
+	if *tunnelProvider == "ngrok" {
+		tunnel.Stdout = os.Stdout
+		tunnel.Stderr = os.Stderr
+		if err := tunnel.Start(); err != nil {
+			return err
+		}
+		defer func() { _ = tunnel.Process.Kill() }()
+		url, err := serve.NgrokPublicURL(30 * time.Second)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("\nPublic URL: %s\n", url)
+	} else {
+		// cloudflared / localhost.run print the URL in stdout.
+		out, err := tunnel.StdoutPipe()
+		if err != nil {
+			return err
+		}
+		tunnel.Stderr = os.Stderr
+		if err := tunnel.Start(); err != nil {
+			return err
+		}
+		defer func() { _ = tunnel.Process.Kill() }()
+		url, err := waitForTunnelURL(out, *tunnelProvider, 30*time.Second)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("\nPublic URL: %s\n", url)
+	}
+	fmt.Println("WARNING: anyone with this URL and the bearer token can ask the agent to read files and run commands. Press Ctrl-C to stop sharing.")
+	<-sigCh
+	return nil
+}
+
+// waitForTunnelURL scans tunnel stdout for a public URL.
+func waitForTunnelURL(r io.Reader, provider string, timeout time.Duration) (string, error) {
+	type result struct {
+		url string
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		scanner := bufio.NewScanner(r)
+		scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+		for scanner.Scan() {
+			line := scanner.Text()
+			var url string
+			var ok bool
+			if provider == "cloudflared" {
+				url, ok = serve.ParseCloudflaredURL(line)
+			} else {
+				url, ok = serve.ParseLocalhostRunURL(line)
+			}
+			if ok {
+				ch <- result{url: url}
+				return
+			}
+		}
+		ch <- result{err: fmt.Errorf("tunnel output ended without a public URL")}
+	}()
+	select {
+	case res := <-ch:
+		return res.url, res.err
+	case <-time.After(timeout):
+		return "", fmt.Errorf("timed out waiting for a public URL from %s", provider)
+	}
+}
+
+// runCron implements `route-x cron add|list|run|remove`.
+// add <name> "<min hour day month weekday>" "<prompt>"
+// list — show tasks; run — execute due tasks now;
+// remove <name>. Cron runs are unattended, so approvals are
+// auto-approved for the run and the task's prompt is executed
+// with the agent's configured mode.
+func runCron(ag *agent.Agent, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: route-x cron add <name> \"<schedule>\" \"<prompt>\" | list | run | remove <name>")
+	}
+	store, err := cron.Load()
+	if err != nil {
+		return err
+	}
+	switch args[0] {
+	case "add":
+		if len(args) != 4 {
+			return fmt.Errorf("usage: route-x cron add <name> \"<min hour day month weekday>\" \"<prompt>\"")
+		}
+		if err := store.Add(cron.Task{Name: args[1], Schedule: args[2], Prompt: args[3]}); err != nil {
+			return err
+		}
+		if err := store.Save(); err != nil {
+			return err
+		}
+		fmt.Printf("Cron task %q added (%s).\n", args[1], args[2])
+		fmt.Println("Run it with `route-x cron run` (add that to your own scheduler — Route-X is not a daemon).")
+		return nil
+	case "list":
+		if len(store.Tasks) == 0 {
+			fmt.Println("No cron tasks.")
+			return nil
+		}
+		for _, t := range store.Tasks {
+			fmt.Printf("- %s  %s  %q  (last run: %s)\n", t.Name, t.Schedule, t.Prompt, t.LastRun)
+		}
+		return nil
+	case "remove":
+		if len(args) != 2 {
+			return fmt.Errorf("usage: route-x cron remove <name>")
+		}
+		if !store.Remove(args[1]) {
+			return fmt.Errorf("no cron task named %q", args[1])
+		}
+		return store.Save()
+	case "run":
+		now := time.Now()
+		due := store.DueTasks(now)
+		if len(due) == 0 {
+			fmt.Println("No cron tasks due.")
+			return nil
+		}
+		// Unattended run: approvals auto-approved.
+		oldApprove := ag.Approve
+		ag.Approve = tools.AutoApprove
+		defer func() { ag.Approve = oldApprove }()
+		for _, t := range due {
+			fmt.Printf("Running cron task %q: %s\n", t.Name, t.Prompt)
+			reply, err := runPrompt(ag, t.Prompt, nil)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "task %q failed: %v\n", t.Name, err)
+			} else {
+				fmt.Println(reply)
+			}
+			store.MarkRun(t.Name, now)
+		}
+		return store.Save()
+	}
+	return fmt.Errorf("unknown cron subcommand %q (add | list | run | remove)", args[0])
+}
+
 func runPrint(ag *agent.Agent, prompt, output string) {
-	reply, err := ag.Run(context.Background(), prompt)
+	reply, err := runPrompt(ag, prompt, nil)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
@@ -282,6 +538,7 @@ func runREPL(ag *agent.Agent, cfg config.Config, workdir string) {
 	// for input and a fresh bufio.Reader for every approval —
 	// the scanner could buffer the "y" answer ahead of the
 	// approval reader, so approvals were silently lost.
+	printedCheckpoint := ""
 	reader := stdinReader
 	for {
 		fmt.Print("route-x> ")
@@ -298,7 +555,7 @@ func runREPL(ag *agent.Agent, cfg config.Config, workdir string) {
 			continue
 		}
 		if strings.HasPrefix(line, "/") {
-			if handleSlash(ag, &cfg, sess, line) {
+			if handleSlash(ag, &cfg, sess, line, workdir) {
 				break // /exit
 			}
 			continue
@@ -306,7 +563,7 @@ func runREPL(ag *agent.Agent, cfg config.Config, workdir string) {
 		sess.Messages = append(sess.Messages, session.Message{Role: "user", Content: line, Time: time.Now().Format(time.RFC3339)})
 		prevDiff := ag.LastDiff
 		fire("PreToolUse")
-		reply, err := ag.Run(context.Background(), line)
+		reply, err := runPrompt(ag, line, replEvent)
 		fire("PostToolUse")
 		if ag.LastDiff != prevDiff {
 			fire("PostEdit")
@@ -316,6 +573,10 @@ func runREPL(ag *agent.Agent, cfg config.Config, workdir string) {
 			continue
 		}
 		fmt.Println(reply)
+		if ag.LastCheckpointID != "" && ag.LastCheckpointID != printedCheckpoint {
+			printedCheckpoint = ag.LastCheckpointID
+			fmt.Printf("  [checkpoint %s created — /checkpoint restore %s to undo]\n", printedCheckpoint, printedCheckpoint)
+		}
 		sess.Messages = append(sess.Messages, session.Message{Role: "agent", Content: reply, Time: time.Now().Format(time.RFC3339)})
 		_ = session.Save(sess)
 	}
@@ -323,7 +584,7 @@ func runREPL(ag *agent.Agent, cfg config.Config, workdir string) {
 
 // handleSlash runs one slash command. It returns true when the REPL
 // should exit.
-func handleSlash(ag *agent.Agent, cfg *config.Config, sess *session.Session, line string) bool {
+func handleSlash(ag *agent.Agent, cfg *config.Config, sess *session.Session, line, workdir string) bool {
 	fields := strings.Fields(line)
 	cmd := fields[0]
 	arg := ""
@@ -346,7 +607,9 @@ func handleSlash(ag *agent.Agent, cfg *config.Config, sess *session.Session, lin
 			"  /goal <task>       run a task autonomously (auto-approves edits)\n" +
 			"  /plan <task>       plan a task without writing anything\n" +
 			"  /agent <task>      dispatch a background subagent\n" +
-			"  /agents            list subagents\n" +
+			"  /agents            list subagents (incl. earlier runs)\n" +
+			"  /compact           summarise session into one checkpoint\n" +
+			"  /plugins           list plugins from .route-x/plugins\n" +
 			"  /review            review git diff + TODO/FIXME\n" +
 			"  /verify            run project checks and report evidence\n" +
 			"  /context           show session context usage\n" +
@@ -356,7 +619,9 @@ func handleSlash(ag *agent.Agent, cfg *config.Config, sess *session.Session, lin
 			"  /hooks             list lifecycle hooks\n" +
 			"  /mcp               list MCP servers and their tools\n" +
 			"  /mcp-call <srv> <tool> [json] call an MCP tool\n" +
-			"  /usage             show model / mode / provider\n" +
+			"  /usage             show model / mode / provider + tokens & cost\n" +
+			"  /checkpoint [list | restore <id>] snapshot & undo workspace\n" +
+			"  /search <word>     search saved sessions\n" +
 			"  /skills            list skills from .route-x/skills\n" +
 			"  /lint              run the lint skill (search TODO / FIXME)\n" +
 			"  /config            show config (API key masked)\n" +
@@ -600,12 +865,79 @@ func handleSlash(ag *agent.Agent, cfg *config.Config, sess *session.Session, lin
 		for _, sa := range ag.ListSubagents() {
 			fmt.Printf("%s [%s] %s — %s\n", sa.ID, sa.Status, sa.Task, sa.Result)
 		}
-		if len(ag.ListSubagents()) == 0 {
+		for _, rec := range ag.LoadPersistedSubagents() {
+			seen := false
+			for _, sa := range ag.ListSubagents() {
+				if sa.ID == rec.ID {
+					seen = true
+				}
+			}
+			if !seen {
+				fmt.Printf("%s [%s] %s — %s (from earlier run)\n", rec.ID, rec.Status, rec.Task, rec.Result)
+			}
+		}
+		if len(ag.ListSubagents()) == 0 && len(ag.LoadPersistedSubagents()) == 0 {
 			fmt.Println("No subagents yet. Try /agent cari TODO")
+		}
+	case "/compact":
+		if err := ag.Compact(context.Background(), sess); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+		} else {
+			fmt.Printf("Session compacted to 1 summary message.\n")
+			_ = session.Save(sess)
+		}
+	case "/plugins":
+		for _, p := range skills.LoadPlugins(".") {
+			fmt.Printf("- %s (%s)\n", p.Name, p.Path)
+		}
+		if len(skills.LoadPlugins(".")) == 0 {
+			fmt.Println("No plugins found. Drop a .md file in .route-x/plugins/ to add one.")
+		}
+	case "/checkpoint":
+		if arg == "" || arg == "list" {
+			for _, m := range checkpoint.List() {
+				fmt.Printf("- %s (%s, %d files)\n", m.ID, m.Created, len(m.Files))
+			}
+			if len(checkpoint.List()) == 0 {
+				fmt.Println("No checkpoints yet. One is created automatically before the first write/edit of a run.")
+			}
+		} else if strings.HasPrefix(arg, "restore ") {
+			id := strings.TrimSpace(strings.TrimPrefix(arg, "restore "))
+			if err := checkpoint.Restore(workdir, id); err != nil {
+				fmt.Fprintln(os.Stderr, "error:", err)
+			} else {
+				fmt.Printf("Restored checkpoint %s.\n", id)
+			}
+		} else {
+			fmt.Println("usage: /checkpoint [list | restore <id>]")
+		}
+	case "/search":
+		if arg == "" {
+			fmt.Println("usage: /search <word>")
+			break
+		}
+		matches, err := session.Search(arg)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			break
+		}
+		if len(matches) == 0 {
+			fmt.Printf("No sessions mention %q.\n", arg)
+			break
+		}
+		for _, m := range matches {
+			fmt.Printf("- %s: %s\n", m.ID, m.Excerpt)
 		}
 	case "/usage":
 		fmt.Printf("model: %s\nmode: %s\nprovider: %s\nsandbox: %s\napproval: %s\nlocal provider: unlimited (offline)\ngemini provider: needs GEMINI_API_KEY\nopenai provider: needs OPENAI_API_KEY\nanthropic provider: needs ANTHROPIC_API_KEY\nollama provider: local OpenAI-compatible endpoint (default http://localhost:11434/v1)\n",
 			cfg.Model, cfg.Mode, cfg.Provider, cfg.Sandbox, cfg.Approval)
+		fmt.Printf("last run: %d in / %d out tokens\n", ag.LastUsage.InputTokens, ag.LastUsage.OutputTokens)
+		fmt.Printf("session total: %d in / %d out tokens\n", ag.TotalUsage.InputTokens, ag.TotalUsage.OutputTokens)
+		if cost, ok := agent.CostUSD(cfg.Model, ag.TotalUsage); ok {
+			fmt.Printf("estimated cost (list prices, may change): $%.4f\n", cost)
+		} else {
+			fmt.Println("estimated cost: unknown model price")
+		}
 	case "/skills":
 		for _, s := range skills.Load(".") {
 			fmt.Printf("- %s (%s)\n", s.Name, s.Path)

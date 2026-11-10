@@ -25,3 +25,18 @@ func TestLoadMissingDirIsNotError(t *testing.T) {
 		t.Fatalf("expected no skills, got %v", got)
 	}
 }
+
+func TestLoadPlugins(t *testing.T) {
+	dir := t.TempDir()
+	plugDir := filepath.Join(dir, ".route-x", "plugins")
+	_ = os.MkdirAll(plugDir, 0o755)
+	_ = os.WriteFile(filepath.Join(plugDir, "deploy.md"), []byte("# deploy\nDeploy the app.\n"), 0o644)
+	t.Setenv("HOME", t.TempDir()) // no global plugins
+	found := LoadPlugins(dir)
+	if len(found) != 1 || found[0].Name != "deploy" {
+		t.Fatalf("plugins = %+v", found)
+	}
+	if len(Load(dir)) != 0 {
+		t.Fatal("plugins must not leak into the skills list")
+	}
+}

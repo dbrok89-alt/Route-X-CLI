@@ -6,7 +6,9 @@ Route-X adalah CLI coding agent ala **Antigravity CLI (`agy`)** dari Google — 
 
 v0.2.0 menggabungkan empat keluarga CLI: Antigravity (mode + subagent), Codex (sandbox, approval, `AGENTS.md`, `/review`), Claude Code (hooks, MCP, permissions, `/context`), dan Hermes (multi-provider, memory persisten, skill belajar, `/verify`).
 
-v0.2.1 adalah rilis stabil terbaru — audit ketat atas v0.2.0: allow list kini exact-match (bukan substring), provider OpenAI/Anthropic bisa dites dengan mock, dan `/review` dites dengan repo git asli. Lihat `CHANGELOG.md`.
+v0.2.1 adalah audit ketat atas v0.2.0: allow list kini exact-match (bukan substring), provider OpenAI/Anthropic bisa dites dengan mock, dan `/review` dites dengan repo git asli.
+
+v0.3.0 adalah rilis stabil terbaru — menutup jurang terbesar v0.2.1: **agentic loop sungguhan**. Model kini memanggil tool (read/search/list/write/edit/run), membaca hasilnya, dan mengulang sampai tugas selesai atau batas 10 langkah, untuk provider Gemini, OpenAI, Anthropic, dan Ollama — plus streaming token, `/compact`, pelacak token/biaya, subagent persisten, plugin, `serve`/`share` (ngrok/cloudflared/localhost.run), cron, checkpoint, dan pencarian sesi. Lihat `CHANGELOG.md`.
 
 Bukan tiruan resmi Google, dan bukan `agy` itu sendiri. Route-X meniru arsitektur dan cara pakainya:
 
@@ -26,6 +28,8 @@ Bukan tiruan resmi Google, dan bukan `agy` itu sendiri. Route-X meniru arsitektu
 - **Provider `gemini` opsional** — kalau `GEMINI_API_KEY` diset, Route-X memanggil Gemini REST API (`generativelanguage.googleapis.com`). Model default `gemini-2.0-flash`, bisa diubah dengan `--model` atau `/model`. Nama model bisa berubah mengikuti katalog Google, cek `/usage` dan dokumentasi Google.
 - **Provider lain (v0.2.0)** — `openai` (`OPENAI_API_KEY`, endpoint bisa diubah lewat `--base-url`), `ollama` (endpoint OpenAI-compatible lokal, default `http://localhost:11434/v1`), dan `anthropic` (`ANTHROPIC_API_KEY`, belum dites live — lihat `/usage`).
 - Tidak ada TUI penuh (Bubble Tea), tidak ada MCP server, tidak ada sandbox OS-level. Perintah berbahaya seperti `rm -rf /` ditolak mentah-mentah, dan perintah shell tetap lewat approval sesuai mode. Sandbox v0.2.0 adalah penegakan kebijakan di level aplikasi (bukan Seatbelt/Landlock kernel), jadi jangan jadikan satu-satunya pertahanan di mesin yang tidak tepercaya.
+- `serve`/`share`: `route-x serve --port 8080` membuka HTTP lokal (loopback saja) dengan bearer token yang dibuat baru tiap jalan; `route-x share` menambahkan tunnel (ngrok butuh akun + `NGROK_AUTHTOKEN`, cloudflared dan localhost.run tidak). Siapa pun yang memegang URL publik **dan** token bisa meminta agen membaca file dan menjalankan perintah — token jangan dibagikan sembarangan.
+- Cron: `route-x cron add "pagi" "0 9 * * *" "cari TODO"` lalu jalankan `route-x cron run` dari scheduler Anda sendiri — Route-X bukan daemon, jadi ia tidak jalan sendiri di latar belakang.
 
 ## Install / build
 

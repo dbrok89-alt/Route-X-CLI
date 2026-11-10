@@ -44,7 +44,7 @@ func TestSlashSandboxPersistsAcrossCommands(t *testing.T) {
 	sess := &session.Session{ID: "test", Model: cfg.Model, Mode: cfg.Mode}
 	_ = os.MkdirAll(filepath.Join(workdir, ".route-x"), 0o755)
 
-	handleSlash(ag, &cfg, sess, "/sandbox read-only")
+	handleSlash(ag, &cfg, sess, "/sandbox read-only", ".")
 	if ag.Config.Sandbox != "read-only" {
 		t.Fatalf("agent sandbox = %q", ag.Config.Sandbox)
 	}
@@ -52,15 +52,15 @@ func TestSlashSandboxPersistsAcrossCommands(t *testing.T) {
 		t.Fatalf("REPL config sandbox = %q (stale copy bug)", cfg.Sandbox)
 	}
 	out := captureStdout(t, func() {
-		handleSlash(ag, &cfg, sess, "/permissions")
+		handleSlash(ag, &cfg, sess, "/permissions", ".")
 	})
 	if !strings.Contains(out, "sandbox: read-only") {
 		t.Fatalf("/permissions printed stale value:\n%s", out)
 	}
 	// And switching back must be visible too.
-	handleSlash(ag, &cfg, sess, "/sandbox workspace-write")
+	handleSlash(ag, &cfg, sess, "/sandbox workspace-write", ".")
 	out = captureStdout(t, func() {
-		handleSlash(ag, &cfg, sess, "/permissions")
+		handleSlash(ag, &cfg, sess, "/permissions", ".")
 	})
 	if !strings.Contains(out, "sandbox: workspace-write") {
 		t.Fatalf("/permissions printed stale value:\n%s", out)
@@ -75,12 +75,12 @@ func TestSlashModePersistsAcrossCommands(t *testing.T) {
 	ag := agent.New(cfg, workdir, tools.AutoApprove)
 	sess := &session.Session{ID: "test", Model: cfg.Model, Mode: cfg.Mode}
 
-	handleSlash(ag, &cfg, sess, "/mode auto")
+	handleSlash(ag, &cfg, sess, "/mode auto", ".")
 	if cfg.Mode != "auto" || ag.Config.Mode != "auto" {
 		t.Fatalf("mode = cfg %q, agent %q", cfg.Mode, ag.Config.Mode)
 	}
 	out := captureStdout(t, func() {
-		handleSlash(ag, &cfg, sess, "/usage")
+		handleSlash(ag, &cfg, sess, "/usage", ".")
 	})
 	if !strings.Contains(out, "mode: auto") {
 		t.Fatalf("/usage printed stale mode:\n%s", out)
