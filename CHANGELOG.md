@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.2.1 — 2026-11-10 (audit ketat, tanpa data palsu)
+
+Audit ulang v0.2.0 menemukan dan memperbaiki kelemahan nyata,
+bukan sekadar polesan luar:
+
+- **Lubang keamanan di allow list:** `IsAllowed` memakai pencocokan
+  substring, sehingga `go vet ./...; rm -rf /` ikut auto-approve
+  karena mengandung entri allow. Sekarang pencocokan harus persis
+  (exact match), dengan test mutasi yang membuktikan test-nya gagal
+  kalau lubang itu dikembalikan.
+- **AnthropicProvider tidak bisa dites:** endpoint di-hardcode ke
+  `api.anthropic.com`, jadi satu-satunya test adalah "kunci kosong
+  = error". Sekarang ada `BaseURL` (default endpoint asli) dan test
+  mock yang memeriksa header `x-api-key`, `anthropic-version`,
+  serta isi body (model + pesan). Test OpenAI diperketat sama:
+  memeriksa header `Authorization` dan body, bukan cuma balasan.
+- **`/review` tanpa test:** sekarang dites dengan repo git asli
+  (init, commit, ubah file berisi TODO, lalu `Review()`).
+- **Bug config pointer jadi test regresi:** `/sandbox` dan `/mode`
+  yang tidak terlihat di `/permissions` dan `/usage` kini punya
+  test di `main_test.go`.
+- **Release tidak konsisten dengan CI:** release hanya membangun
+  4 binary, CI membangun 5 — `route-x-linux-arm64` kini ikut
+  di-release.
+- **Test baru lain:** `config.Load` mereset sandbox/approval tidak
+  valid ke default; error JSON-RPC MCP (`CallTool` ke tool yang
+  tidak ada) harus muncul sebagai error, bukan balasan kosong.
+- Anthropic tetap belum dites live — butuh `ANTHROPIC_API_KEY`.
+
 ## v0.2.0 — 2026-11-10 (gabungan Antigravity + Codex + Claude + Hermes)
 
 Semua slice A–D dikerjakan di atas v0.1.1 (bukan menimpa WIP mentah),
