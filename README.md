@@ -14,8 +14,6 @@ v0.3.1 menambah provider `intern` (Shanghai AI Lab discovery API, model default 
 
 v0.4.0 adalah rilis stabil terbaru — melengkapi semua tool bawaan OpenCode: `glob`, `apply_patch`, `skill`, `todowrite`, `question`, `task`, `plan`, `webfetch`, `websearch`, dan `lsp` (klien LSP minimal: definition, references, hover, symbols; butuh server seperti `gopls` di `lsp_server`). `websearch` tanpa kunci memakai DuckDuckGo; kalau `EXA_API_KEY` diset, pakai Exa. `webfetch` menolak host privat/loopback (SSRF guard). Yang sengaja belum ada: `codesearch` semantik (butuh embedding) — jangan diklaim ada. Lihat `CHANGELOG.md`.
 
-v0.3.1 melengkapi `--help`: subcommand `serve`/`share`/`cron` dan slash command baru kini tercantum, dengan test regresi.
-
 Bukan tiruan resmi Google, dan bukan `agy` itu sendiri. Route-X meniru arsitektur dan cara pakainya:
 
 - satu binary Go, jalan di terminal, bekerja langsung di folder proyek
