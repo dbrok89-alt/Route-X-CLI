@@ -31,9 +31,19 @@ echo "Installing ${BINARY_NAME}..."
 DOWNLOAD_URL="https://github.com/${REPO}/releases/latest/download/${ASSET_NAME}"
 
 if command -v curl >/dev/null 2>&1; then
-  curl -sSL "$DOWNLOAD_URL" -o "${DEST_DIR}/${BINARY_NAME}" 2>/dev/null || true
+  curl -fsSL "$DOWNLOAD_URL" -o "${DEST_DIR}/${BINARY_NAME}" 2>/dev/null || true
 elif command -v wget >/dev/null 2>&1; then
   wget -qO "${DEST_DIR}/${BINARY_NAME}" "$DOWNLOAD_URL" 2>/dev/null || true
+fi
+
+# A failed download (e.g. an HTML 404 page) must never be installed
+# as the binary: verify the ELF magic bytes first.
+if [ -s "${DEST_DIR}/${BINARY_NAME}" ]; then
+  MAGIC=$(head -c 4 "${DEST_DIR}/${BINARY_NAME}" | od -An -tx1 | tr -d ' \n')
+  if [ "$MAGIC" != "7f454c46" ]; then
+    echo "Downloaded file is not a valid binary (magic: $MAGIC). Falling back to 'go install'..."
+    rm -f "${DEST_DIR}/${BINARY_NAME}"
+  fi
 fi
 
 if [ ! -s "${DEST_DIR}/${BINARY_NAME}" ]; then
