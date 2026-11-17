@@ -37,10 +37,17 @@ elif command -v wget >/dev/null 2>&1; then
 fi
 
 # A failed download (e.g. an HTML 404 page) must never be installed
-# as the binary: verify the ELF magic bytes first.
+# as the binary: verify the magic bytes first — ELF on Linux,
+# Mach-O on macOS (a darwin binary is never ELF, so checking only
+# for ELF would delete every valid macOS download).
 if [ -s "${DEST_DIR}/${BINARY_NAME}" ]; then
   MAGIC=$(head -c 4 "${DEST_DIR}/${BINARY_NAME}" | od -An -tx1 | tr -d ' \n')
-  if [ "$MAGIC" != "7f454c46" ]; then
+  VALID=0
+  case "$MAGIC" in
+    7f454c46) [ "$OS" = "linux" ] && VALID=1 ;;
+    cffaedfe|feedfacf|cefaedfe|feedface|cafebabe) [ "$OS" = "darwin" ] && VALID=1 ;;
+  esac
+  if [ "$VALID" != "1" ]; then
     echo "Downloaded file is not a valid binary (magic: $MAGIC). Falling back to 'go install'..."
     rm -f "${DEST_DIR}/${BINARY_NAME}"
   fi
