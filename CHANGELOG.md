@@ -28,6 +28,9 @@ bisa masuk tanpa gerbang CI.
   sebagai binary — `curl` kini memakai `-f` dan file hasil unduh
   diperiksa magic byte ELF sebelum dipasang; kalau bukan binary,
   jatuh ke `go install` seperti saat unduhan kosong.
+  Catatan setelah rilis (PR #9): di macOS, magic byte Mach-O
+  (64-bit, 32-bit, fat) juga diterima — sebelumnya binary macOS
+  yang valid selalu dibuang karena ceknya hanya kenal ELF.
 - Dites: gofmt/vet/test -race 16 paket lolos, mutation check 5x
   (tui bullet, codesearch cap, codesearch query kosong, RunDue,
   Watch — semua tes gagal saat pengaman dilemahkan), build 5 OS,
