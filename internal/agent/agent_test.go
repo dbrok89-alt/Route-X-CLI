@@ -682,6 +682,33 @@ func TestAgentQuestionTaskPlan(t *testing.T) {
 	}
 }
 
+func TestAgentCodesearchTool(t *testing.T) {
+	dir := t.TempDir()
+	content := "package main\n\n// comment mentioning ProcessData\nfunc ProcessData(data string) {\n\t// call ProcessData here\n}\n"
+	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{Model: "local", Provider: "local", Mode: "auto", Sandbox: "workspace-write", Approval: "on-request"}
+	a := New(cfg, dir, tools.AutoApprove)
+	ctx := context.Background()
+
+	out, err := a.ExecuteTool(ctx, loop.ToolCall{Name: "codesearch", Arguments: map[string]any{"query": "ProcessData"}})
+	if err != nil {
+		t.Fatalf("codesearch: %v", err)
+	}
+	first := strings.Split(strings.TrimSpace(out), "\n")[0]
+	if !strings.Contains(first, "func ProcessData") {
+		t.Errorf("top match should be the declaration, got %q (full output:\n%s)", first, out)
+	}
+	if _, err := a.ExecuteTool(ctx, loop.ToolCall{Name: "codesearch", Arguments: map[string]any{"query": "   "}}); err == nil {
+		t.Fatal("codesearch must refuse an empty query")
+	}
+	out, err = a.ExecuteTool(ctx, loop.ToolCall{Name: "codesearch", Arguments: map[string]any{"query": "NoSuchSymbolZZZ"}})
+	if err != nil || !strings.Contains(out, "No code matches") {
+		t.Fatalf("codesearch no-match: out=%q err=%v", out, err)
+	}
+}
+
 func TestAgentWebAndLSPTools(t *testing.T) {
 	t.Setenv("ROUTE_X_ALLOW_PRIVATE_FETCH", "1")
 	dir := t.TempDir()
