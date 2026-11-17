@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -14,7 +15,14 @@ type scoredMatch struct {
 
 // CodeSearch scans code files under root for query, assigning higher score to symbol declarations,
 // sorting by highest score, and returning up to limit matches.
+// It is keyword-ranked, not semantic search: no embedding model is
+// involved, so results are exact substring matches only. Guards mirror
+// tools.Search: skipDirs are skipped and files over 1 MiB are not read
+// (so a compiled binary in the workspace never produces junk matches).
 func CodeSearch(root, query string, limit int) ([]Match, error) {
+	if strings.TrimSpace(query) == "" {
+		return nil, fmt.Errorf("codesearch needs a non-empty query")
+	}
 	var scored []scoredMatch
 	lowerQuery := strings.ToLower(query)
 	symbolKeywords := []string{"func ", "type ", "struct ", "interface ", "def ", "class ", "const ", "var "}
@@ -24,10 +32,14 @@ func CodeSearch(root, query string, limit int) ([]Match, error) {
 			return nil
 		}
 		if d.IsDir() {
-			name := d.Name()
-			if name == ".git" || name == "node_modules" || name == "vendor" || strings.HasPrefix(name, ".") {
+			if skipDirs[d.Name()] {
 				return filepath.SkipDir
 			}
+			return nil
+		}
+
+		info, err := d.Info()
+		if err != nil || info.Size() > 1<<20 {
 			return nil
 		}
 

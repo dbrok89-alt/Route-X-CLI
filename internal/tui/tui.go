@@ -197,7 +197,7 @@ func RenderMarkdown(md string) string {
 		} else if strings.HasPrefix(l, "## ") {
 			res = append(res, fmt.Sprintf("%s%s%s", Bold+Magenta, strings.TrimPrefix(l, "## "), Reset))
 		} else if strings.HasPrefix(l, "- ") {
-			res = append(res, fmt.Sprintf("  %s•%s %s", Yellow, Reset, strings.TrimPrefix(l, "- ")))
+			res = append(res, fmt.Sprintf("  %s• %s%s", Yellow, strings.TrimPrefix(l, "- "), Reset))
 		} else {
 			res = append(res, l)
 		}

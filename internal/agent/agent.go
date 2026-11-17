@@ -1249,6 +1249,8 @@ func ToolDefs() []loop.ToolDef {
 			Parameters: loop.Schema(map[string]any{"path": str}, "path")},
 		{Name: "search", Description: "Search for a text pattern (regex) in the workspace files.",
 			Parameters: loop.Schema(map[string]any{"pattern": str}, "pattern")},
+		{Name: "codesearch", Description: "Search code by keyword, ranked so symbol declarations (func, type, struct, interface, const, var) come first. Returns up to 10 matches with file, line and text. Keyword-ranked, not semantic search.",
+			Parameters: loop.Schema(map[string]any{"query": str}, "query")},
 		{Name: "list", Description: "List files in the workspace (first 50).",
 			Parameters: loop.Schema(map[string]any{})},
 		{Name: "write", Description: "Create or overwrite a file with the given content. Shows a diff and follows the approval mode.",
@@ -1430,6 +1432,23 @@ func (a *Agent) ExecuteTool(ctx context.Context, call loop.ToolCall) (string, er
 			return fmt.Sprintf("No files match %q.", pattern), nil
 		}
 		return strings.Join(files, "\n"), nil
+	case "codesearch":
+		q, ok := loop.StrArg(call.Arguments, "query")
+		if !ok || strings.TrimSpace(q) == "" {
+			return "", fmt.Errorf("codesearch needs a query argument")
+		}
+		matches, err := tools.CodeSearch(a.Workdir, q, 10)
+		if err != nil {
+			return "", err
+		}
+		if len(matches) == 0 {
+			return fmt.Sprintf("No code matches %q.", q), nil
+		}
+		var b strings.Builder
+		for _, m := range matches {
+			fmt.Fprintf(&b, "%s:%d: %s\n", m.File, m.Line, m.Text)
+		}
+		return b.String(), nil
 	case "apply_patch":
 		patch, ok := loop.StrArg(call.Arguments, "patch")
 		if !ok {

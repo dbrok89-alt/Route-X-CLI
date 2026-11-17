@@ -120,3 +120,27 @@ func TestSlashModePersistsAcrossCommands(t *testing.T) {
 		t.Fatalf("/usage printed stale mode:\n%s", out)
 	}
 }
+
+func TestSlashCodesearch(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	workdir := t.TempDir()
+	cfg := config.Default()
+	ag := agent.New(cfg, workdir, tools.AutoApprove)
+	sess := &session.Session{ID: "test", Model: cfg.Model, Mode: cfg.Mode}
+	if err := os.WriteFile(filepath.Join(workdir, "a.go"), []byte("package main\n\nfunc ProcessData(x string) {\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := captureStdout(t, func() {
+		handleSlash(ag, &cfg, sess, "/codesearch ProcessData", workdir)
+	})
+	if !strings.Contains(out, "func ProcessData") {
+		t.Fatalf("/codesearch output missing declaration:\n%s", out)
+	}
+	out = captureStdout(t, func() {
+		handleSlash(ag, &cfg, sess, "/codesearch NoSuchSymbolZZZ", workdir)
+	})
+	if !strings.Contains(out, "No code matches") {
+		t.Fatalf("/codesearch no-match output wrong:\n%s", out)
+	}
+}

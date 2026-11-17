@@ -15,6 +15,12 @@
 // persistent subagents, plugins, serve/share, cron and checkpoints
 // (OpenCode / ngrok / Hermes features, ported honestly).
 //
+// v0.5.0 wires in the features that landed on main as files only:
+// keyword-ranked codesearch (loop tool + /codesearch), a cron
+// watcher (`route-x cron watch`), and terminal UI components
+// (banner, status bar, progress, box, markdown, spinner) used by
+// the REPL banner.
+//
 // Usage:
 //
 //	route-x                  # interactive REPL
@@ -52,6 +58,7 @@ import (
 	"route-x/internal/session"
 	"route-x/internal/skills"
 	"route-x/internal/tools"
+	"route-x/internal/tui"
 )
 
 const version = "0.5.0"
@@ -66,9 +73,9 @@ var stdinReader = bufio.NewReader(os.Stdin)
 // here, so users had no way to discover them from --help.
 func printUsage() {
 	fmt.Fprintf(os.Stderr, "Route-X %s — terminal coding agent (inspired by Antigravity CLI / agy)\n\n", version)
-	fmt.Fprintf(os.Stderr, "Usage:\n  route-x [prompt]\n  route-x -p \"prompt\" [--output json] [--mode plan]\n  route-x init\n  route-x serve [--port 8080]\n  route-x share [--provider ngrok|cloudflared|localhost.run] [--port 8080]\n  route-x cron add <name> \"<schedule>\" \"<prompt>\" | list | run | remove <name>\n  route-x --version\n\nFlags:\n")
+	fmt.Fprintf(os.Stderr, "Usage:\n  route-x [prompt]\n  route-x -p \"prompt\" [--output json] [--mode plan]\n  route-x init\n  route-x serve [--port 8080]\n  route-x share [--provider ngrok|cloudflared|localhost.run] [--port 8080]\n  route-x cron add <name> \"<schedule>\" \"<prompt>\" | list | run | remove <name> | watch [interval]\n  route-x --version\n\nFlags:\n")
 	flag.PrintDefaults()
-	fmt.Fprintf(os.Stderr, "\nSlash commands (interactive mode):\n  /help /model [name] /mode [name] /provider [name] /goal <task>\n  /plan <task> /agent <task> /agents /usage /skills /config\n  /resume [id] /clear /diff /exit /compact /plugins\n  /permissions /sandbox [name] /approval [name] /review /verify\n  /context /memory /remember <fact> /learn <name> /hooks /mcp\n  /checkpoint /search <word> /lint\n")
+	fmt.Fprintf(os.Stderr, "\nSlash commands (interactive mode):\n  /help /model [name] /mode [name] /provider [name] /goal <task>\n  /plan <task> /agent <task> /agents /usage /skills /config\n  /resume [id] /clear /diff /exit /compact /plugins\n  /permissions /sandbox [name] /approval [name] /review /verify\n  /context /memory /remember <fact> /learn <name> /hooks /mcp\n  /checkpoint /search <word> /codesearch <word> /lint\n")
 }
 
 func main() {
@@ -420,15 +427,17 @@ func waitForTunnelURL(r io.Reader, provider string, timeout time.Duration) (stri
 	}
 }
 
-// runCron implements `route-x cron add|list|run|remove`.
+// runCron implements `route-x cron add|list|run|remove|watch`.
 // add <name> "<min hour day month weekday>" "<prompt>"
 // list — show tasks; run — execute due tasks now;
-// remove <name>. Cron runs are unattended, so approvals are
+// remove <name>; watch [interval] — keep running and execute due
+// tasks as they come due (default every 1m); Ctrl+C stops.
+// Cron runs are unattended, so approvals are
 // auto-approved for the run and the task's prompt is executed
 // with the agent's configured mode.
 func runCron(ag *agent.Agent, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: route-x cron add <name> \"<schedule>\" \"<prompt>\" | list | run | remove <name>")
+		return fmt.Errorf("usage: route-x cron add <name> " + `"<schedule>" "<prompt>"` + " | list | run | remove <name> | watch [interval]")
 	}
 	store, err := cron.Load()
 	if err != nil {
@@ -487,8 +496,37 @@ func runCron(ag *agent.Agent, args []string) error {
 			store.MarkRun(t.Name, now)
 		}
 		return store.Save()
+	case "watch":
+		interval := time.Minute
+		if len(args) > 1 {
+			d, err := time.ParseDuration(args[1])
+			if err != nil {
+				return fmt.Errorf("invalid watch interval %q (e.g. 30s, 1m)", args[1])
+			}
+			interval = d
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		// Unattended run: approvals auto-approved.
+		oldApprove := ag.Approve
+		ag.Approve = tools.AutoApprove
+		defer func() { ag.Approve = oldApprove }()
+		fmt.Printf("Watching cron tasks every %s (Ctrl+C to stop).\n", interval)
+		runFn := func(t cron.Task) error {
+			fmt.Printf("Running cron task %q: %s\n", t.Name, t.Prompt)
+			reply, err := runPrompt(ag, t.Prompt, nil)
+			if err != nil {
+				return err
+			}
+			fmt.Println(reply)
+			return nil
+		}
+		if err := cron.Watch(ctx, interval, runFn); err != nil && err != context.Canceled {
+			return err
+		}
+		return nil
 	}
-	return fmt.Errorf("unknown cron subcommand %q (add | list | run | remove)", args[0])
+	return fmt.Errorf("unknown cron subcommand %q (add | list | run | remove | watch)", args[0])
 }
 
 func runPrint(ag *agent.Agent, prompt, output string) {
@@ -538,6 +576,7 @@ func runREPL(ag *agent.Agent, cfg config.Config, workdir string) {
 		}
 		return line, nil
 	}
+	fmt.Println(tui.RenderBanner("Route-X "+version, tui.DefaultTheme()))
 	fmt.Printf("Route-X %s — model %s · mode %s · provider %s · sandbox %s · approval %s\n",
 		version, cfg.Model, cfg.Mode, cfg.Provider, cfg.Sandbox, cfg.Approval)
 	fmt.Println("Type a task in plain language, or /help for slash commands. /exit to quit.")
@@ -659,6 +698,7 @@ func handleSlash(ag *agent.Agent, cfg *config.Config, sess *session.Session, lin
 			"  /usage             show model / mode / provider + tokens & cost\n" +
 			"  /checkpoint [list | restore <id>] snapshot & undo workspace\n" +
 			"  /search <word>     search saved sessions\n" +
+			"  /codesearch <word> search code by keyword (declarations first)\n" +
 			"  /skills            list skills from .route-x/skills\n" +
 			"  /lint              run the lint skill (search TODO / FIXME)\n" +
 			"  /config            show config (API key masked)\n" +
@@ -969,6 +1009,23 @@ func handleSlash(ag *agent.Agent, cfg *config.Config, sess *session.Session, lin
 		}
 		for _, m := range matches {
 			fmt.Printf("- %s: %s\n", m.ID, m.Excerpt)
+		}
+	case "/codesearch":
+		if arg == "" {
+			fmt.Println("usage: /codesearch <word>")
+			break
+		}
+		matches, err := tools.CodeSearch(workdir, arg, 10)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			break
+		}
+		if len(matches) == 0 {
+			fmt.Printf("No code matches %q.\n", arg)
+			break
+		}
+		for _, m := range matches {
+			fmt.Printf("- %s:%d: %s\n", m.File, m.Line, m.Text)
 		}
 	case "/usage":
 		fmt.Printf("model: %s\nmode: %s\nprovider: %s\nsandbox: %s\napproval: %s\nlocal provider: unlimited (offline)\ngemini provider: needs GEMINI_API_KEY\nopenai provider: needs OPENAI_API_KEY\nanthropic provider: needs ANTHROPIC_API_KEY\nollama provider: local OpenAI-compatible endpoint (default http://localhost:11434/v1)\nintern provider: needs INTERN_API_KEY (Shanghai AI Lab discovery API, default model Atria-Dawn)\n",
