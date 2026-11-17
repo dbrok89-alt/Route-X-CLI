@@ -1,5 +1,38 @@
 # Changelog
 
+## v0.5.0 — 2026-11-17 (stabilitas: pasang fitur yang belum terpakai + CI hijau)
+
+Audit stabilitas atas main: CI push terakhir merah (job test gagal),
+tiga fitur sudah ada sebagai file tapi belum dipakai dari mana pun,
+dan proteksi branch main sudah tidak ada sehingga push langsung
+bisa masuk tanpa gerbang CI.
+
+- **TUI:** `RenderMarkdown` menaruh kode reset ANSI di antara bullet
+  dan teks, sehingga tes `TestRenderMarkdownAndToolCard` gagal
+  (teks tampak "• Item 1" tidak pernah muncul utuh). Diperbaiki
+  agar bullet dan teks dalam satu rentang warna; dibuktikan
+  mutation check (kembalikan baris lama → tes gagal).
+- **codesearch kini terpasang:** tool loop `codesearch` + slash
+  `/codesearch <kata>`; cari kata kunci dengan deklarasi simbol
+  (func/type/struct/...) diutamakan. BUKAN semantik embedding.
+  Dikeraskan mengikuti `Search`: direktori skipDirs dilewati,
+  file > 1 MiB tidak dibaca, query kosong ditolak.
+- **cron watch kini terpasang:** `route-x cron watch [interval]`
+  (default 1m) menjalankan tugas yang jatuh tempo terus-menerus.
+  `RunDue` tidak lagi berhenti di tugas pertama yang gagal —
+  tugas lain tetap jalan dan error digabung; `Watch` tidak lagi
+  mati karena satu tugas gagal, hanya Ctrl+C yang menghentikannya.
+- **TUI dipakai di REPL:** banner `Route-X <versi>` kini dirender
+  lewat `tui.RenderBanner` saat REPL mulai.
+- **install.sh:** unduhan gagal (misal 404) tidak lagi dipasang
+  sebagai binary — `curl` kini memakai `-f` dan file hasil unduh
+  diperiksa magic byte ELF sebelum dipasang; kalau bukan binary,
+  jatuh ke `go install` seperti saat unduhan kosong.
+- Dites: gofmt/vet/test -race 16 paket lolos, mutation check 5x
+  (tui bullet, codesearch cap, codesearch query kosong, RunDue,
+  Watch — semua tes gagal saat pengaman dilemahkan), build 5 OS,
+  smoke (REPL banner, /codesearch, cron watch).
+
 ## v0.4.0 — 2026-11-10 (semua tool OpenCode)
 
 Melengkapi daftar tool bawaan OpenCode (opencode.ai/docs/tools)
