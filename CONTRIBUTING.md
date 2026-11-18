@@ -10,21 +10,22 @@ Thank you for contributing to **Route-X**! Please review the guidelines below be
 
 ## Codebase Structure (`internal/` Packages)
 
-The project consists of 14 modular internal packages inside `internal/`:
-- `agent` – Core AI agent loop and orchestration logic.
-- `agentic` – Planning, tool invocation, and decision-making engine.
-- `config` – Configuration loading and user preferences.
-- `context` – Session context, tokens, and history management.
-- `hooks` – Lifecycle hook execution and process isolation.
-- `llm` – LLM API provider integrations and streaming interface.
-- `lsp` – Language Server Protocol client and subprocess protocol.
-- `mcp` – Model Context Protocol server/client protocol handler.
-- `patch` – Code diff parsing and file application engine.
-- `prompt` – System prompts, templates, and formatting.
-- `security` – Command allow-lists and permission confirmation.
-- `terminal` – CLI interactive terminal formatting and output.
-- `tools` – Built-in system execution tools (`bash`, `apply_patch`).
-- `util` – Core utilities and standard helper functions.
+The project consists of 15 modular internal packages inside `internal/`:
+- `agent` – Core AI agent loop and orchestration logic; providers local/gemini/openai/anthropic/ollama/intern, tool dispatch, subagents, /review, /verify.
+- `checkpoint` – Workspace snapshots before risky edits, restore/undo.
+- `config` – Configuration loading and user preferences (`~/.route-x/config.json`).
+- `cron` – Recurring agent tasks and the `cron watch` watcher.
+- `hooks` – Lifecycle hook execution (SessionStart..Stop).
+- `loop` – Agentic loop: model-driven tool calling until done or step cap.
+- `lsp` – Language Server Protocol client (definition, references, hover, symbols).
+- `mcp` – Model Context Protocol client (tools/list, tools/call).
+- `memory` – Persistent memory and learned skills (`/remember`, `/learn`).
+- `serve` – Local HTTP agent endpoint and tunnel sharing (`serve`/`share`).
+- `session` – Session save / resume / search (JSON).
+- `skills` – Loading `.route-x/skills/*.md` and plugins.
+- `tools` – Built-in tools: read, search, list, write+diff, run, glob, apply_patch, codesearch, todowrite, question, task, plan, and approval gates.
+- `tui` – Terminal UI components (banner, box, markdown, spinner).
+- `web` – Web tools: webfetch (SSRF-guarded) and websearch.
 
 ## Development Commands
 
