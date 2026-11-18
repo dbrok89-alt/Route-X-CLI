@@ -79,7 +79,7 @@ route-x> /agents
 | `/help` | daftar perintah |
 | `/model [nama]` | lihat / ganti model |
 | `/mode [nama]` | lihat / ganti mode |
-| `/provider [nama]` | `local`, `gemini`, `openai`, `anthropic`, atau `ollama` |
+| `/provider [nama]` | `local`, `gemini`, `openai`, `anthropic`, `ollama`, atau `intern` |
 | `/sandbox [nama]` | `read-only`, `workspace-write`, atau `danger-full-access` |
 | `/approval [nama]` | `on-request` atau `never` |
 | `/permissions` | sandbox, approval, daftar allow/deny |
@@ -96,6 +96,11 @@ route-x> /agents
 | `/plan <tugas>` | rencana saja, tidak menulis |
 | `/agent <tugas>` | kirim subagent latar belakang |
 | `/agents` | daftar subagent |
+| `/compact` | ringkas sesi jadi satu pesan ringkasan |
+| `/plugins` | daftar plugin dari `.route-x/plugins` |
+| `/checkpoint [list \| restore <id>]` | snapshot & undo workspace |
+| `/search <kata>` | cari di sesi tersimpan |
+| `/codesearch <kata>` | cari kode per kata kunci (deklarasi diutamakan) |
 | `/usage` | model, mode, provider, kuota |
 | `/skills`, `/lint` | daftar skill, jalankan skill lint |
 | `/config` | lihat config (API key disamarkan) |
@@ -141,14 +146,21 @@ Skill adalah file Markdown biasa. Tambah file baru di `.route-x/skills/nama.md`,
 route-x/
 ├── main.go                  # flag, print mode, REPL, slash command
 ├── internal/
-│   ├── agent/agent.go       # provider local/gemini/openai/anthropic/ollama, dispatch tools, subagent, /review, /verify
+│   ├── agent/agent.go       # provider local/gemini/openai/anthropic/ollama/intern, dispatch tools, subagent, /review, /verify
+│   ├── checkpoint/          # snapshot workspace sebelum edit berisiko, restore (/checkpoint)
 │   ├── config/config.go     # ~/.route-x/config.json
+│   ├── cron/                # tugas terjadwal + watcher (route-x cron watch)
 │   ├── hooks/hooks.go       # lifecycle hooks SessionStart..Stop
+│   ├── loop/                # agentic loop: model memanggil tool sampai selesai / batas langkah
+│   ├── lsp/                 # klien LSP minimal (definition, references, hover, symbols)
 │   ├── mcp/mcp.go           # client MCP stdio (tools/list, tools/call)
 │   ├── memory/memory.go     # memory persisten + /learn
-│   ├── session/session.go   # simpan / resume sesi (JSON)
-│   ├── skills/skills.go     # load .route-x/skills/*.md
-│   └── tools/tools.go       # read, search, write+diff, run, approval
+│   ├── serve/               # HTTP lokal + tunnel share (serve/share)
+│   ├── session/session.go   # simpan / resume / cari sesi (JSON)
+│   ├── skills/skills.go     # load .route-x/skills/*.md + plugin
+│   ├── tools/               # read, search, write+diff, run, approval + glob, apply_patch, codesearch, todowrite, ...
+│   ├── tui/                 # komponen TUI (banner, box, markdown, spinner)
+│   └── web/                 # webfetch + websearch
 ├── Makefile
 └── README.md
 ```
