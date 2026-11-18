@@ -1,7 +1,7 @@
 GO ?= go
 BIN := route-x
 
-.PHONY: build test vet install clean
+.PHONY: build test vet lint install clean fmt
 
 build:
 	$(GO) build -o $(BIN) .
@@ -15,6 +15,8 @@ fmt:
 
 vet:
 	$(GO) vet ./...
+
+lint: fmt vet
 
 install: build
 	install -m 755 $(BIN) /usr/local/bin/$(BIN)
