@@ -31,6 +31,11 @@ bisa masuk tanpa gerbang CI.
   Catatan setelah rilis (PR #9): di macOS, magic byte Mach-O
   (64-bit, 32-bit, fat) juga diterima — sebelumnya binary macOS
   yang valid selalu dibuang karena ceknya hanya kenal ELF.
+  Catatan setelah rilis (PR #12): `--help` kini juga menyebut
+  `/mcp-call` dan `/quit` — sebelumnya daftar slash command di
+  `--help` melewatkan keduanya, padahal `/mcp-call` sudah ada di
+  `/help` REPL dan `/quit` adalah alias dari `/exit` (juga
+  ditambahkan ke `/help` REPL dan tabel slash command README).
 - Dites: gofmt/vet/test -race 16 paket lolos, mutation check 5x
   (tui bullet, codesearch cap, codesearch query kosong, RunDue,
   Watch — semua tes gagal saat pengaman dilemahkan), build 5 OS,
