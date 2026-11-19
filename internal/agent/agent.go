@@ -1241,7 +1241,9 @@ func extractFile(prompt string) string {
 }
 
 // ToolDefs is the tool registry the model may call in the
-// agentic loop: read, search, list, write, edit, run.
+// agentic loop: read, search, codesearch, list, write, edit,
+// run, glob, apply_patch, skill, todowrite, question, task,
+// plan, webfetch, websearch, lsp.
 func ToolDefs() []loop.ToolDef {
 	str := map[string]any{"type": "string"}
 	return []loop.ToolDef{
