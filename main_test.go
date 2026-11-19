@@ -53,11 +53,14 @@ func captureStderr(t *testing.T, f func()) string {
 // Regression test for the v0.3.0 --help gap: serve/share/cron existed
 // as subcommands but --help never mentioned them, and the slash list
 // was missing /compact, /plugins, /checkpoint, /search and /lint.
+// The same pattern recurred afterwards: --help omitted /mcp-call
+// and the /quit alias for /exit, so they are asserted here too.
 func TestHelpListsSubcommands(t *testing.T) {
 	out := captureStderr(t, printUsage)
 	for _, want := range []string{
 		"route-x serve", "route-x share", "route-x cron",
 		"/compact", "/plugins", "/checkpoint", "/search", "/lint",
+		"/mcp-call", "/quit",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("--help is missing %q:\n%s", want, out)

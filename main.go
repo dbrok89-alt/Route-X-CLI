@@ -75,7 +75,7 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "Route-X %s — terminal coding agent (inspired by Antigravity CLI / agy)\n\n", version)
 	fmt.Fprintf(os.Stderr, "Usage:\n  route-x [prompt]\n  route-x -p \"prompt\" [--output json] [--mode plan]\n  route-x init\n  route-x serve [--port 8080]\n  route-x share [--provider ngrok|cloudflared|localhost.run] [--port 8080]\n  route-x cron add <name> \"<schedule>\" \"<prompt>\" | list | run | remove <name> | watch [interval]\n  route-x --version\n\nFlags:\n")
 	flag.PrintDefaults()
-	fmt.Fprintf(os.Stderr, "\nSlash commands (interactive mode):\n  /help /model [name] /mode [name] /provider [name] /goal <task>\n  /plan <task> /agent <task> /agents /usage /skills /config\n  /resume [id] /clear /diff /exit /compact /plugins\n  /permissions /sandbox [name] /approval [name] /review /verify\n  /context /memory /remember <fact> /learn <name> /hooks /mcp\n  /checkpoint /search <word> /codesearch <word> /lint\n")
+	fmt.Fprintf(os.Stderr, "\nSlash commands (interactive mode):\n  /help /model [name] /mode [name] /provider [name] /goal <task>\n  /plan <task> /agent <task> /agents /usage /skills /config\n  /resume [id] /clear /diff /exit /quit /compact /plugins\n  /permissions /sandbox [name] /approval [name] /review /verify\n  /context /memory /remember <fact> /learn <name> /hooks /mcp\n  /checkpoint /search <word> /codesearch <word> /lint /mcp-call <srv> <tool> [json]\n")
 }
 
 func main() {
@@ -705,7 +705,8 @@ func handleSlash(ag *agent.Agent, cfg *config.Config, sess *session.Session, lin
 			"  /resume [id]       list sessions, or resume one\n" +
 			"  /diff              show the last diff\n" +
 			"  /clear             clear the screen\n" +
-			"  /exit              quit")
+			"  /exit              quit\n" +
+			"  /quit              quit (same as /exit)")
 	case "/model":
 		if arg == "" {
 			fmt.Println("model:", cfg.Model)

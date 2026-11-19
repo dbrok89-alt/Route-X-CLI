@@ -106,7 +106,7 @@ route-x> /agents
 | `/config` | lihat config (API key disamarkan) |
 | `/resume [id]` | daftar / lanjutkan sesi tersimpan |
 | `/diff` | diff terakhir |
-| `/clear`, `/exit` | bersihkan layar, keluar |
+| `/clear`, `/exit`, `/quit` | bersihkan layar, keluar |
 
 ## Config
 
