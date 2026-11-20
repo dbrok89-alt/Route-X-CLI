@@ -36,6 +36,18 @@ bisa masuk tanpa gerbang CI.
   `--help` melewatkan keduanya, padahal `/mcp-call` sudah ada di
   `/help` REPL dan `/quit` adalah alias dari `/exit` (juga
   ditambahkan ke `/help` REPL dan tabel slash command README).
+  Catatan setelah rilis (PR #14): fallback `install.sh` saat
+  unduhan binary gagal tidak pernah bisa jalan — `go install
+  github.com/dbrok89-alt/Route-X-CLI@latest` selalu ditolak Go
+  karena go.mod mendeklarasikan `module route-x` ("module
+  declares its path as: route-x but was required as:
+  github.com/dbrok89-alt/Route-X-CLI", dibuktikan dengan
+  go1.23.0 dan ujung-ke-ujung dengan skrip lama). Fallback kini
+  membangun dari tarball sumber rilis terbaru (tag, atau main
+  kalau tag tak terurai) memakai curl/wget + tar + go — tanpa
+  `git`, tanpa module path; dibuktikan end-to-end: skrip lama
+  gagal tanpa binary, skrip baru berhasil memasang binary yang
+  jalan (`--version` 0.5.0).
 - Dites: gofmt/vet/test -race 16 paket lolos, mutation check 5x
   (tui bullet, codesearch cap, codesearch query kosong, RunDue,
   Watch — semua tes gagal saat pengaman dilemahkan), build 5 OS,
