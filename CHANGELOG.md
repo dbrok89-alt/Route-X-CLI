@@ -48,6 +48,17 @@ bisa masuk tanpa gerbang CI.
   `git`, tanpa module path; dibuktikan end-to-end: skrip lama
   gagal tanpa binary, skrip baru berhasil memasang binary yang
   jalan (`--version` 0.5.0).
+  Catatan setelah rilis (PR #15): tes `TestHelpListsSubcommands`
+  hanya menegaskan 10 string, jadi penghilangan perintah lain dari
+  `--help`, `/help` REPL, atau tabel slash command README akan
+  lolos `go test` tanpa bunyi — pola yang sudah berulang 3x
+  (v0.3.0, PR #11, PR #12). Tes kini ekshaustif: satu daftar
+  kebenaran berisi ke-34 slash command ditegaskan di ketiga
+  permukaan itu, plus ke-17 nama tool `ToolDefs()` ditegaskan di
+  daftar `docs/index.html` (pola yang sama pernah karangan di
+  PR #10); dibuktikan mutation check 4x (hapus `/lint` dari
+  `--help`, `/quit` dari `/help`, `/compact` dari tabel README,
+  `webfetch` dari docs — keempatnya tes gagal).
 - Dites: gofmt/vet/test -race 16 paket lolos, mutation check 5x
   (tui bullet, codesearch cap, codesearch query kosong, RunDue,
   Watch — semua tes gagal saat pengaman dilemahkan), build 5 OS,
