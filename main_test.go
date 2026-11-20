@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -50,20 +51,120 @@ func captureStderr(t *testing.T, f func()) string {
 	return string(buf[:n])
 }
 
+// allSlashCommands is the single source of truth for every slash
+// command handleSlash accepts — the 33 distinct case labels plus
+// /quit, the alias for /exit. Any command added to handleSlash must
+// be added here too, or the sync test below fails.
+var allSlashCommands = []string{
+	"/agent", "/agents", "/approval", "/checkpoint", "/clear",
+	"/codesearch", "/compact", "/config", "/context", "/diff",
+	"/exit", "/goal", "/help", "/hooks", "/learn", "/lint",
+	"/mcp", "/mcp-call", "/memory", "/mode", "/model",
+	"/permissions", "/plan", "/plugins", "/provider", "/quit",
+	"/remember", "/resume", "/review", "/sandbox", "/search",
+	"/skills", "/usage", "/verify",
+}
+
+// repoRoot returns the repository root (the directory holding
+// README.md), located from this test file so the test works no
+// matter which directory `go test` is run from.
+func repoRoot(t *testing.T) string {
+	t.Helper()
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	return filepath.Dir(file)
+}
+
+func readRepoFile(t *testing.T, name string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), name))
+	if err != nil {
+		t.Fatalf("cannot read %s: %v", name, err)
+	}
+	return string(data)
+}
+
 // Regression test for the v0.3.0 --help gap: serve/share/cron existed
 // as subcommands but --help never mentioned them, and the slash list
 // was missing /compact, /plugins, /checkpoint, /search and /lint.
 // The same pattern recurred afterwards: --help omitted /mcp-call
-// and the /quit alias for /exit, so they are asserted here too.
+// and the /quit alias for /exit (PR #12), and README omitted 5
+// commands (PR #11). The old test only asserted 10 strings, so a
+// future omission of any other command would have passed silently.
+// This test is exhaustive: every command in allSlashCommands must
+// appear in --help (printUsage), in the REPL /help output, and in
+// the README slash-command table. It must also pass on main as-is
+// today — all three surfaces are currently in sync.
 func TestHelpListsSubcommands(t *testing.T) {
-	out := captureStderr(t, printUsage)
-	for _, want := range []string{
-		"route-x serve", "route-x share", "route-x cron",
-		"/compact", "/plugins", "/checkpoint", "/search", "/lint",
-		"/mcp-call", "/quit",
-	} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("--help is missing %q:\n%s", want, out)
+	if len(allSlashCommands) != 34 {
+		t.Fatalf("allSlashCommands has %d entries, want 34 — update it when adding a command", len(allSlashCommands))
+	}
+	usage := captureStderr(t, printUsage)
+	for _, want := range []string{"route-x serve", "route-x share", "route-x cron"} {
+		if !strings.Contains(usage, want) {
+			t.Fatalf("--help is missing %q:\n%s", want, usage)
+		}
+	}
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	workdir := t.TempDir()
+	cfg := config.Default()
+	ag := agent.New(cfg, workdir, tools.AutoApprove)
+	sess := &session.Session{ID: "test", Model: cfg.Model, Mode: cfg.Mode}
+	helpOut := captureStdout(t, func() {
+		handleSlash(ag, &cfg, sess, "/help", ".")
+	})
+
+	readme := readRepoFile(t, "README.md")
+	// Scope the README check to the "## Slash command" table: many
+	// commands are also mentioned in the release-notes prose, so a
+	// plain strings.Contains on the whole file would pass even after
+	// the table row was deleted (proved by mutation: removing the
+	// /compact row passed until the check was scoped here).
+	table := readmeTable(t, readme)
+	for _, cmd := range allSlashCommands {
+		if !strings.Contains(usage, cmd) {
+			t.Fatalf("--help is missing %q:\n%s", cmd, usage)
+		}
+		if !strings.Contains(helpOut, cmd) {
+			t.Fatalf("/help is missing %q:\n%s", cmd, helpOut)
+		}
+		if !strings.Contains(table, cmd) {
+			t.Fatalf("README slash-command table is missing %q", cmd)
+		}
+	}
+}
+
+// readmeTable returns the "## Slash command" table from README.md.
+func readmeTable(t *testing.T, readme string) string {
+	t.Helper()
+	start := strings.Index(readme, "## Slash command")
+	if start < 0 {
+		t.Fatal("README is missing the '## Slash command' section")
+	}
+	rest := readme[start:]
+	end := strings.Index(rest[len("## Slash command"):], "\n## ")
+	if end < 0 {
+		t.Fatal("README '## Slash command' section has no closing heading")
+	}
+	return rest[:len("## Slash command")+end]
+}
+
+// The same drift once hit docs/index.html: it listed 15 invented
+// tools instead of the 17 real ones from ToolDefs() (PR #10). Lock
+// the tool list the same way — every ToolDefs name must appear there.
+func TestDocsListsAllTools(t *testing.T) {
+	html := readRepoFile(t, filepath.Join("docs", "index.html"))
+	defs := agent.ToolDefs()
+	if len(defs) != 17 {
+		t.Fatalf("ToolDefs has %d tools, want 17 — update docs/index.html when adding a tool", len(defs))
+	}
+	for _, def := range defs {
+		if !strings.Contains(html, "<li>"+def.Name+"</li>") {
+			t.Fatalf("docs/index.html tool list is missing %q", def.Name)
 		}
 	}
 }
