@@ -169,6 +169,24 @@ func TestDocsListsAllTools(t *testing.T) {
 	}
 }
 
+// The install one-liner lived only in docs/index.html while the
+// README "Install / build" section showed build-from-source only
+// (PR #16): a reader following the README had to install Go and
+// clone, even though a release binary needs neither. Lock the
+// one-liner in the README so it cannot silently disappear again.
+func TestReadmeDocumentsInstallScript(t *testing.T) {
+	readme := readRepoFile(t, "README.md")
+	for _, want := range []string{
+		"https://raw.githubusercontent.com/dbrok89-alt/Route-X-CLI/main/install.sh",
+		"curl -fsSL",
+		"~/.local/bin",
+	} {
+		if !strings.Contains(readme, want) {
+			t.Fatalf("README install section is missing %q", want)
+		}
+	}
+}
+
 // Regression test for the bug the v0.2.0 smoke test caught:
 // handleSlash used to receive config by value, so /sandbox and
 // /mode changed the agent and the saved file but the REPL's own
