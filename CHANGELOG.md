@@ -72,6 +72,19 @@ bisa masuk tanpa gerbang CI.
   `default`, dengan penegasan perintah berbahaya tetap ditolak di
   semua mode. Tes baru `TestReadmeDocumentsInstallScript` mengunci
   one-liner di README supaya tidak hilang lagi tanpa bunyi.
+  Catatan setelah rilis (PR #17): contoh setelah one-liner install
+  di README menulis `./route-x --version`, padahal install.sh
+  memasang binary ke `/usr/local/bin` atau `~/.local/bin`, bukan
+  ke direktori saat ini — contoh itu kini `route-x --version`
+  (bentuk `./route-x` tetap benar di bagian build dari sumber).
+  Bagian "## Keamanan" README juga masih mengklaim mode `default`
+  "selalu" minta persetujuan `y/N`, padahal approval `never`
+  menang atas mode (main.go:168) — klaim yang sama sudah
+  dikualifikasi di `SECURITY.md` lewat PR #16, tapi bullet README
+  ini ketinggalan; kini dikualifikasi dengan rujukan ke
+  `/approval never`. Tes baru
+  `TestReadmeInstallExampleAndSecurityQualification` mengunci
+  keduanya.
 - Dites: gofmt/vet/test -race 16 paket lolos, mutation check 5x
   (tui bullet, codesearch cap, codesearch query kosong, RunDue,
   Watch — semua tes gagal saat pengaman dilemahkan), build 5 OS,

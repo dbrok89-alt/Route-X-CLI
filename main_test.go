@@ -174,6 +174,54 @@ func TestDocsListsAllTools(t *testing.T) {
 // (PR #16): a reader following the README had to install Go and
 // clone, even though a release binary needs neither. Lock the
 // one-liner in the README so it cannot silently disappear again.
+// The install one-liner puts the binary in /usr/local/bin or
+// ~/.local/bin (PR #16), not in the current directory — so the
+// example after it must be `route-x --version`, not
+// `./route-x --version` (that form is only right after a local
+// `go build -o route-x .`). The same drift hit the "## Keamanan"
+// section: it said default mode "selalu" asks y/N, but approval
+// `never` wins over the mode (main.go:168, /approval handler) —
+// the wording SECURITY.md was qualified for in PR #16, while the
+// README bullet was left unqualified. Lock both.
+func TestReadmeInstallExampleAndSecurityQualification(t *testing.T) {
+	readme := readRepoFile(t, "README.md")
+	install := readmeSection(t, readme, "## Install / build")
+	// Only the one-liner part (before "Atau build dari sumber"):
+	// the build-from-source part below it correctly uses ./route-x,
+	// because `go build -o route-x .` puts the binary in the cwd.
+	oneLiner, _, _ := strings.Cut(install, "Atau build dari sumber")
+	if strings.Contains(oneLiner, "./route-x --version") {
+		t.Fatalf("README install one-liner must use `route-x --version` (install.sh puts the binary in /usr/local/bin or ~/.local/bin, not the current directory):\n%s", oneLiner)
+	}
+	if !strings.Contains(oneLiner, "route-x --version") {
+		t.Fatalf("README install one-liner is missing the version check:\n%s", oneLiner)
+	}
+	security := readmeSection(t, readme, "## Keamanan")
+	for _, want := range []string{"approval", "never"} {
+		if !strings.Contains(security, want) {
+			t.Fatalf("README \"## Keamanan\" must qualify the default-mode prompt with %q:\n%s", want, security)
+		}
+	}
+	if strings.Contains(security, "selalu minta persetujuan") {
+		t.Fatalf("README \"## Keamanan\" must not claim default mode always prompts:\n%s", security)
+	}
+}
+
+// readmeSection returns the README section starting at heading.
+func readmeSection(t *testing.T, readme, heading string) string {
+	t.Helper()
+	start := strings.Index(readme, heading)
+	if start < 0 {
+		t.Fatalf("README is missing the %q section", heading)
+	}
+	rest := readme[start:]
+	end := strings.Index(rest[len(heading):], "\n## ")
+	if end < 0 {
+		return rest
+	}
+	return rest[:len(heading)+end]
+}
+
 func TestReadmeDocumentsInstallScript(t *testing.T) {
 	readme := readRepoFile(t, "README.md")
 	for _, want := range []string{

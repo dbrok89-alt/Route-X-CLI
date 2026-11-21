@@ -44,7 +44,7 @@ Cara tercepat — tanpa Go, langsung dari binary rilis:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/dbrok89-alt/Route-X-CLI/main/install.sh | sh
-./route-x --version
+route-x --version
 ```
 
 Skrip memasang ke `/usr/local/bin` kalau bisa ditulis, kalau tidak ke `~/.local/bin` (pastikan direktori itu ada di `PATH`). Kalau unduhan binary gagal, skrip membangun dari tarball sumber rilis terbaru — itu baru butuh Go.
@@ -176,7 +176,7 @@ route-x/
 
 ## Keamanan
 
-- Mode `default` selalu minta persetujuan `y/N` sebelum menulis file atau menjalankan shell.
+- Mode `default` minta persetujuan `y/N` sebelum menulis file atau menjalankan shell — kecuali approval `never` diset, yang menang atas mode (`/approval never`, lihat juga `SECURITY.md`).
 - Mode `plan` tidak pernah menulis atau menjalankan apa-apa.
 - Perintah berbahaya ditolak sebelum approval.
 - Jangan jalankan `auto` di repo yang belum di-commit — selalu cek diff dulu (`/diff`).
