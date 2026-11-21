@@ -40,7 +40,16 @@ Bukan tiruan resmi Google, dan bukan `agy` itu sendiri. Route-X meniru arsitektu
 
 ## Install / build
 
-Butuh Go 1.23+.
+Cara tercepat — tanpa Go, langsung dari binary rilis:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/dbrok89-alt/Route-X-CLI/main/install.sh | sh
+./route-x --version
+```
+
+Skrip memasang ke `/usr/local/bin` kalau bisa ditulis, kalau tidak ke `~/.local/bin` (pastikan direktori itu ada di `PATH`). Kalau unduhan binary gagal, skrip membangun dari tarball sumber rilis terbaru — itu baru butuh Go.
+
+Atau build dari sumber (butuh Go 1.23+):
 
 ```bash
 cd route-x
