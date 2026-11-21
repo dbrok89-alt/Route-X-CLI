@@ -59,6 +59,19 @@ bisa masuk tanpa gerbang CI.
   PR #10); dibuktikan mutation check 4x (hapus `/lint` dari
   `--help`, `/quit` dari `/help`, `/compact` dari tabel README,
   `webfetch` dari docs — keempatnya tes gagal).
+  Catatan setelah rilis (PR #16): README bagian "Install / build"
+  sama sekali tidak menyebut `install.sh` — pembaca README hanya
+  diberi jalan build dari sumber (butuh Go), padahal halaman docs
+  sudah mengiklankan one-liner dan skrip itu sendiri sudah
+  diperbaiki dua kali (PR #9, PR #14). One-liner kini ada di README,
+  plus catatan tujuan pemasangan dan fallback build dari tarball.
+  `SECURITY.md` juga mengklaim prompt konfirmasi interaktif itu
+  "mandatory" tanpa kualifikasi, padahal mode `auto` /
+  `accept-edits` dan approval `never` memang sengaja melewatinya
+  (`approveForMode` di main.go) — kini dikualifikasi ke mode
+  `default`, dengan penegasan perintah berbahaya tetap ditolak di
+  semua mode. Tes baru `TestReadmeDocumentsInstallScript` mengunci
+  one-liner di README supaya tidak hilang lagi tanpa bunyi.
 - Dites: gofmt/vet/test -race 16 paket lolos, mutation check 5x
   (tui bullet, codesearch cap, codesearch query kosong, RunDue,
   Watch — semua tes gagal saat pengaman dilemahkan), build 5 OS,
