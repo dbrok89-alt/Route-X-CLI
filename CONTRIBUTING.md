@@ -23,8 +23,8 @@ The project consists of 15 modular internal packages inside `internal/`:
 - `serve` – Local HTTP agent endpoint and tunnel sharing (`serve`/`share`).
 - `session` – Session save / resume / search (JSON).
 - `skills` – Loading `.route-x/skills/*.md` and plugins.
-- `tools` – Built-in tools: read, search, list, write+diff, run, glob, apply_patch, codesearch, todowrite, question, task, plan, and approval gates.
-- `tui` – Terminal UI components (banner, box, markdown, spinner).
+- `tools` – Built-in tools: read, search, codesearch, list, write+diff, edit, run, glob, apply_patch, skill, todowrite, question, task, plan, webfetch, websearch, lsp, and approval gates.
+- `tui` – Terminal UI components (banner, status bar, progress bar, box, markdown, spinner).
 - `web` – Web tools: webfetch (SSRF-guarded) and websearch.
 
 ## Development Commands
