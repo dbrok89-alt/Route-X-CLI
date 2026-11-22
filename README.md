@@ -168,7 +168,7 @@ route-x/
 │   ├── session/session.go   # simpan / resume / cari sesi (JSON)
 │   ├── skills/skills.go     # load .route-x/skills/*.md + plugin
 │   ├── tools/               # read, search, write+diff, run, approval + glob, apply_patch, codesearch, todowrite, ...
-│   ├── tui/                 # komponen TUI (banner, box, markdown, spinner)
+│   ├── tui/                 # komponen TUI (banner, status bar, progress bar, box, markdown, spinner)
 │   └── web/                 # webfetch + websearch
 ├── Makefile
 └── README.md
