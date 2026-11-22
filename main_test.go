@@ -169,6 +169,49 @@ func TestDocsListsAllTools(t *testing.T) {
 	}
 }
 
+// The same drift hit CONTRIBUTING.md, which PR #11 fixed for the
+// package list but not for the tools inside it: its `tools` bullet
+// listed only 12 of the 17 ToolDefs names — edit, skill, webfetch,
+// websearch and lsp were missing, even though webfetch/websearch/lsp
+// are named in the `web`/`lsp` bullets below it, so a whole-file
+// strings.Contains would pass while the tools bullet stayed wrong.
+// Its `tui` bullet had the same gap: banner, box, markdown, spinner
+// but no status bar or progress bar, both real components (v0.5.0).
+// Lock both bullets, scoped to their own lines.
+func TestContributingListsAllTools(t *testing.T) {
+	contrib := readRepoFile(t, "CONTRIBUTING.md")
+	toolsLine := contributingBullet(t, contrib, "`tools`")
+	defs := agent.ToolDefs()
+	if len(defs) != 17 {
+		t.Fatalf("ToolDefs has %d tools, want 17 — update CONTRIBUTING.md when adding a tool", len(defs))
+	}
+	for _, def := range defs {
+		if !strings.Contains(toolsLine, def.Name) {
+			t.Fatalf("CONTRIBUTING.md `tools` bullet is missing %q:\n%s", def.Name, toolsLine)
+		}
+	}
+	tuiLine := contributingBullet(t, contrib, "`tui`")
+	for _, want := range []string{"status bar", "progress bar"} {
+		if !strings.Contains(tuiLine, want) {
+			t.Fatalf("CONTRIBUTING.md `tui` bullet is missing %q:\n%s", want, tuiLine)
+		}
+	}
+}
+
+// contributingBullet returns the single bullet line starting with
+// "- <name> –" from CONTRIBUTING.md, so a name mentioned in another
+// bullet cannot mask its absence from this one.
+func contributingBullet(t *testing.T, contrib, name string) string {
+	t.Helper()
+	for _, line := range strings.Split(contrib, "\n") {
+		if strings.HasPrefix(line, "- "+name+" –") {
+			return line
+		}
+	}
+	t.Fatalf("CONTRIBUTING.md is missing the %s bullet", name)
+	return ""
+}
+
 // The install one-liner lived only in docs/index.html while the
 // README "Install / build" section showed build-from-source only
 // (PR #16): a reader following the README had to install Go and
