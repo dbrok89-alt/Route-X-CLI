@@ -96,6 +96,16 @@ bisa masuk tanpa gerbang CI.
   bullet `tools` itu sendiri (bukan sekadar di seluruh file,
   karena `webfetch`/`websearch`/`lsp` sudah disebut di bullet
   lain) dan kedua komponen TUI di bullet `tui`.
+  Catatan setelah rilis (PR #19): kelalaian yang sama persis
+  dengan PR #18 masih ada di pohon "## Struktur proyek" README —
+  baris `tui/` hanya menyebut 4 dari 6 komponen (status bar dan
+  progress bar hilang), padahal keduanya komponen nyata
+  (RenderStatusBar, RenderProgressBar) dan sudah disebut di
+  paragraf v0.5.0 serta di CONTRIBUTING.md. Baris itu kini
+  lengkap; tes baru `TestReadmeTreeListsAllTuiComponents`
+  mengunci keenam komponen di baris `tui/` itu sendiri (bukan
+  sekadar di seluruh file, karena keduanya sudah disebut di
+  tempat lain di README).
 - Dites: gofmt/vet/test -race 16 paket lolos, mutation check 5x
   (tui bullet, codesearch cap, codesearch query kosong, RunDue,
   Watch — semua tes gagal saat pengaman dilemahkan), build 5 OS,
