@@ -198,6 +198,35 @@ func TestContributingListsAllTools(t *testing.T) {
 	}
 }
 
+// The same drift hit the README project tree, which PR #18 fixed
+// in CONTRIBUTING.md but not here: the `tui/` line in
+// "## Struktur proyek" listed only banner, box, markdown, spinner
+// — status bar and progress bar were missing, even though both are
+// real components (RenderStatusBar, RenderProgressBar in
+// internal/tui) and both are named in the same README (v0.5.0
+// paragraph and "## Yang tidak sama dengan `agy` asli") and in CONTRIBUTING.md. Lock all
+// six on the tree line itself: a whole-file check would pass while
+// the line stayed wrong, because both names appear elsewhere.
+func TestReadmeTreeListsAllTuiComponents(t *testing.T) {
+	readme := readRepoFile(t, "README.md")
+	tree := readmeSection(t, readme, "## Struktur proyek")
+	var tuiLine string
+	for _, line := range strings.Split(tree, "\n") {
+		if strings.Contains(line, "tui/") {
+			tuiLine = line
+			break
+		}
+	}
+	if tuiLine == "" {
+		t.Fatal("README \"## Struktur proyek\" is missing the tui/ line")
+	}
+	for _, want := range []string{"banner", "status bar", "progress bar", "box", "markdown", "spinner"} {
+		if !strings.Contains(tuiLine, want) {
+			t.Fatalf("README project-tree tui/ line is missing %q:\n%s", want, tuiLine)
+		}
+	}
+}
+
 // contributingBullet returns the single bullet line starting with
 // "- <name> –" from CONTRIBUTING.md, so a name mentioned in another
 // bullet cannot mask its absence from this one.
