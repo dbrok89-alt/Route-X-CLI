@@ -227,6 +227,80 @@ func TestReadmeTreeListsAllTuiComponents(t *testing.T) {
 	}
 }
 
+// The v0.5.0 TUI claim overstated the wiring: README and the main.go
+// package comment both wrote all six TUI components as "used by the
+// REPL banner", but in production code only RenderBanner is called
+// (main.go, the REPL banner line) — RenderStatusBar,
+// RenderProgressBar, RenderBox, RenderMarkdown and Spinner are only
+// exercised by tests, and RenderToolCard (which uses two of them
+// internally) is never called from production code either. That is
+// the same "file without a caller" pattern v0.5.0 was meant to fix,
+// so the claim is now qualified in both README spots and in main.go.
+// The README project-tree tools/ line had the same incompleteness
+// in miniature: 8 of the 17 ToolDefs names plus "..." — lock all 17
+// on that line itself. (PR #20.)
+func TestReadmeTuiWiringIsHonest(t *testing.T) {
+	readme := readRepoFile(t, "README.md")
+	var v050Line string
+	for _, line := range strings.Split(readme, "\n") {
+		if strings.Contains(line, "v0.5.0 adalah rilis stabilitas") {
+			v050Line = line
+			break
+		}
+	}
+	if v050Line == "" {
+		t.Fatal("README is missing the v0.5.0 paragraph")
+	}
+	for _, want := range []string{"hanya banner", "belum dipanggil dari kode produksi"} {
+		if !strings.Contains(v050Line, want) {
+			t.Fatalf("README v0.5.0 paragraph must qualify the TUI wiring with %q:\n%s", want, v050Line)
+		}
+	}
+	if strings.Contains(v050Line, "spinner — dipakai di banner REPL") {
+		t.Fatalf("README v0.5.0 paragraph must not claim all TUI components are used by the REPL banner:\n%s", v050Line)
+	}
+	agy := readmeSection(t, readme, "## Yang tidak sama dengan `agy` asli")
+	var agyLine string
+	for _, line := range strings.Split(agy, "\n") {
+		if strings.Contains(line, "komponen TUI (banner") {
+			agyLine = line
+			break
+		}
+	}
+	if agyLine == "" {
+		t.Fatal("README \"Yang tidak sama dengan `agy` asli\" is missing the TUI bullet")
+	}
+	if !strings.Contains(agyLine, "hanya banner yang dipakai di banner REPL") {
+		t.Fatalf("README TUI bullet must qualify that only the banner is used by the REPL banner:\n%s", agyLine)
+	}
+	mainGo := readRepoFile(t, "main.go")
+	if !strings.Contains(mainGo, "not yet called from production code") {
+		t.Fatal("main.go v0.5.0 package comment must qualify that the other TUI components are not yet called from production code")
+	}
+	if strings.Contains(mainGo, "spinner) used by\n// the REPL banner") {
+		t.Fatal("main.go v0.5.0 package comment must not claim all TUI components are used by the REPL banner")
+	}
+	tree := readmeSection(t, readme, "## Struktur proyek")
+	var toolsLine string
+	for _, line := range strings.Split(tree, "\n") {
+		if strings.Contains(line, "├── tools/") {
+			toolsLine = line
+			break
+		}
+	}
+	if toolsLine == "" {
+		t.Fatal("README \"## Struktur proyek\" is missing the tools/ line")
+	}
+	if strings.Contains(toolsLine, "...") {
+		t.Fatalf("README project-tree tools/ line must list all tools, not end with \"...\":\n%s", toolsLine)
+	}
+	for _, def := range agent.ToolDefs() {
+		if !strings.Contains(toolsLine, def.Name) {
+			t.Fatalf("README project-tree tools/ line is missing tool %q:\n%s", def.Name, toolsLine)
+		}
+	}
+}
+
 // contributingBullet returns the single bullet line starting with
 // "- <name> –" from CONTRIBUTING.md, so a name mentioned in another
 // bullet cannot mask its absence from this one.
