@@ -17,9 +17,10 @@
 //
 // v0.5.0 wires in the features that landed on main as files only:
 // keyword-ranked codesearch (loop tool + /codesearch), a cron
-// watcher (`route-x cron watch`), and terminal UI components
-// (banner, status bar, progress, box, markdown, spinner) used by
-// the REPL banner.
+// watcher (`route-x cron watch`), and the terminal UI banner
+// (RenderBanner used by the REPL banner; the other components —
+// status bar, progress bar, box, markdown, spinner — are tested
+// but not yet called from production code).
 //
 // Usage:
 //
