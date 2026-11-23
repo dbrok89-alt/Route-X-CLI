@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bufio"
+	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -9,8 +11,10 @@ import (
 
 	"route-x/internal/agent"
 	"route-x/internal/config"
+	"route-x/internal/loop"
 	"route-x/internal/session"
 	"route-x/internal/tools"
+	"route-x/internal/tui"
 )
 
 // captureStdout runs f while os.Stdout points at a pipe and returns
@@ -235,10 +239,13 @@ func TestReadmeTreeListsAllTuiComponents(t *testing.T) {
 // exercised by tests, and RenderToolCard (which uses two of them
 // internally) is never called from production code either. That is
 // the same "file without a caller" pattern v0.5.0 was meant to fix,
-// so the claim is now qualified in both README spots and in main.go.
-// The README project-tree tools/ line had the same incompleteness
-// in miniature: 8 of the 17 ToolDefs names plus "..." — lock all 17
-// on that line itself. (PR #20.)
+// so the claim was qualified in both README spots and in main.go
+// (PR #20). PR #21 wires four of the five back in: the status bar
+// and tool card for tool progress, the progress bar for the step
+// cap, and markdown rendering for agent replies — the spinner stays
+// test-only because its Start() ticks without ever printing a
+// frame. The wording below locks the new state; the tools/ line
+// still locks all 17 ToolDefs names on that line itself.
 func TestReadmeTuiWiringIsHonest(t *testing.T) {
 	readme := readRepoFile(t, "README.md")
 	var v050Line string
@@ -251,13 +258,13 @@ func TestReadmeTuiWiringIsHonest(t *testing.T) {
 	if v050Line == "" {
 		t.Fatal("README is missing the v0.5.0 paragraph")
 	}
-	for _, want := range []string{"hanya banner", "belum dipanggil dari kode produksi"} {
+	for _, want := range []string{"PR #21", "spinner masih test-only"} {
 		if !strings.Contains(v050Line, want) {
-			t.Fatalf("README v0.5.0 paragraph must qualify the TUI wiring with %q:\n%s", want, v050Line)
+			t.Fatalf("README v0.5.0 paragraph must describe the PR #21 wiring with %q:\n%s", want, v050Line)
 		}
 	}
-	if strings.Contains(v050Line, "spinner — dipakai di banner REPL") {
-		t.Fatalf("README v0.5.0 paragraph must not claim all TUI components are used by the REPL banner:\n%s", v050Line)
+	if strings.Contains(v050Line, "hanya banner yang dipakai di banner REPL") {
+		t.Fatalf("README v0.5.0 paragraph must not carry the PR #20 qualification any more:\n%s", v050Line)
 	}
 	agy := readmeSection(t, readme, "## Yang tidak sama dengan `agy` asli")
 	var agyLine string
@@ -270,12 +277,16 @@ func TestReadmeTuiWiringIsHonest(t *testing.T) {
 	if agyLine == "" {
 		t.Fatal("README \"Yang tidak sama dengan `agy` asli\" is missing the TUI bullet")
 	}
-	if !strings.Contains(agyLine, "hanya banner yang dipakai di banner REPL") {
-		t.Fatalf("README TUI bullet must qualify that only the banner is used by the REPL banner:\n%s", agyLine)
+	for _, want := range []string{"(PR #21)", "spinner masih test-only"} {
+		if !strings.Contains(agyLine, want) {
+			t.Fatalf("README TUI bullet must describe the PR #21 wiring with %q:\n%s", want, agyLine)
+		}
 	}
 	mainGo := readRepoFile(t, "main.go")
-	if !strings.Contains(mainGo, "not yet called from production code") {
-		t.Fatal("main.go v0.5.0 package comment must qualify that the other TUI components are not yet called from production code")
+	for _, want := range []string{"PR #21 wires the rest", "The spinner stays"} {
+		if !strings.Contains(mainGo, want) {
+			t.Fatalf("main.go v0.5.0 package comment must describe the PR #21 wiring with %q", want)
+		}
 	}
 	if strings.Contains(mainGo, "spinner) used by\n// the REPL banner") {
 		t.Fatal("main.go v0.5.0 package comment must not claim all TUI components are used by the REPL banner")
@@ -298,6 +309,112 @@ func TestReadmeTuiWiringIsHonest(t *testing.T) {
 		if !strings.Contains(toolsLine, def.Name) {
 			t.Fatalf("README project-tree tools/ line is missing tool %q:\n%s", def.Name, toolsLine)
 		}
+	}
+}
+
+// PR #21 wires the TUI components into replEvent: the status bar
+// for a tool starting, the tool card for its result, and the status
+// bar plus progress bar when the loop finishes. Call replEvent
+// directly with synthetic events and assert each component actually
+// renders — if the wiring regresses to plain prints, the tool name,
+// status codes and progress percentage disappear from the output.
+func TestReplEventRendersTuiComponents(t *testing.T) {
+	out := captureStdout(t, func() {
+		replEvent(loop.Event{Kind: "tool_start", Tool: "read", Step: 1})
+	})
+	for _, want := range []string{"[INFO 0]", "read", "step 1"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("tool_start must render a status bar with %q, got:\n%s", want, out)
+		}
+	}
+
+	out = captureStdout(t, func() {
+		replEvent(loop.Event{Kind: "tool_result", Tool: "read", Text: "hello world", Step: 1})
+	})
+	for _, want := range []string{"Tool: read", "[OK 200]", "hello world"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("tool_result must render a tool card with %q, got:\n%s", want, out)
+		}
+	}
+
+	out = captureStdout(t, func() {
+		replEvent(loop.Event{Kind: "tool_result", Tool: "run", Text: "boom", IsError: true, Step: 2})
+	})
+	for _, want := range []string{"Tool: run", "[ERROR 500]", "boom"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("error tool_result must render an error tool card with %q, got:\n%s", want, out)
+		}
+	}
+
+	// One very long result line must be capped, not stretch the card.
+	long := strings.Repeat("x", 200)
+	out = captureStdout(t, func() {
+		replEvent(loop.Event{Kind: "tool_result", Tool: "read", Text: long, Step: 1})
+	})
+	if !strings.Contains(out, "...") {
+		t.Fatalf("long tool_result must be truncated with \"...\", got:\n%s", out)
+	}
+	if strings.Contains(out, long) {
+		t.Fatalf("long tool_result must not print the full %d-char line", len(long))
+	}
+
+	out = captureStdout(t, func() {
+		replEvent(loop.Event{Kind: "done", Step: 7, Usage: loop.Usage{InputTokens: 10, OutputTokens: 5}})
+	})
+	for _, want := range []string{"10 in / 5 out tokens", "70%"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("done must render the token summary and progress bar with %q, got:\n%s", want, out)
+		}
+	}
+}
+
+// scriptedReplyProvider answers every agentic step with one fixed
+// text-only reply, so the REPL can be driven without a live model.
+type scriptedReplyProvider struct{ reply string }
+
+func (p *scriptedReplyProvider) CompleteTools(ctx context.Context, messages []loop.Message, defs []loop.ToolDef) (loop.Message, loop.Usage, error) {
+	return loop.Message{Role: "assistant", Content: p.reply}, loop.Usage{}, nil
+}
+
+// PR #21 renders the agent reply as markdown in the REPL, but the
+// session must still store the raw reply. Drive runREPL end to end
+// with piped stdin and a scripted provider, then check both sides:
+// the terminal shows the rendered form (the "# " heading becomes a
+// bold cyan line, so the raw "# Done" must not appear), while the
+// session file on disk holds the raw "# Done" text.
+func TestReplRendersAgentReplyAsMarkdown(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := t.TempDir()
+	cfg := config.Config{Mode: "auto", Sandbox: "workspace-write", Approval: "on-request", Provider: "local"}
+	ag := agent.New(cfg, dir, tools.AutoApprove)
+	ag.ToolProviderOverride = &scriptedReplyProvider{reply: "# Done\n\nAll good."}
+	oldStdin := stdinReader
+	stdinReader = bufio.NewReader(strings.NewReader("hello\n/exit\n"))
+	defer func() { stdinReader = oldStdin }()
+
+	out := captureStdout(t, func() { runREPL(ag, cfg, dir) })
+	rendered := tui.RenderMarkdown("# Done\n\nAll good.")
+	if !strings.Contains(out, rendered) {
+		t.Fatalf("REPL must print the markdown-rendered reply %q, got:\n%s", rendered, out)
+	}
+	if strings.Contains(out, "# Done") {
+		t.Fatalf("REPL must not print the raw markdown reply, got:\n%s", out)
+	}
+
+	files, err := filepath.Glob(filepath.Join(home, ".route-x", "sessions", "*.json"))
+	if err != nil || len(files) != 1 {
+		t.Fatalf("expected exactly one saved session, got %v, err=%v", files, err)
+	}
+	data, err := os.ReadFile(files[0])
+	if err != nil {
+		t.Fatalf("cannot read saved session: %v", err)
+	}
+	if !strings.Contains(string(data), "# Done") {
+		t.Fatalf("session must store the raw reply, got:\n%s", data)
+	}
+	if strings.Contains(string(data), "\x1b[1m\x1b[36mDone") {
+		t.Fatalf("session must not store the ANSI-rendered reply, got:\n%s", data)
 	}
 }
 
