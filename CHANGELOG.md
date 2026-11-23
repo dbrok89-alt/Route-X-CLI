@@ -106,6 +106,22 @@ bisa masuk tanpa gerbang CI.
   mengunci keenam komponen di baris `tui/` itu sendiri (bukan
   sekadar di seluruh file, karena keduanya sudah disebut di
   tempat lain di README).
+  Catatan setelah rilis (PR #20): klaim TUI v0.5.0 di README dan
+  komentar paket main.go ternyata melebih-lebihkan — keduanya menulis
+  keenam komponen TUI "dipakai di banner REPL", padahal di kode
+  produksi hanya `RenderBanner` yang dipanggil (main.go:580);
+  `RenderStatusBar`, `RenderProgressBar`, `RenderBox`,
+  `RenderMarkdown`, dan `Spinner` hanya dipakai tes (RenderToolCard
+  yang memakai dua di antaranya pun tidak pernah dipanggil dari kode
+  produksi) — persis pola "file tanpa pemakaian" yang v0.5.0
+  seharusnya membereskan. Klaimnya kini dikualifikasi di paragraf
+  v0.5.0, di bullet "Yang tidak sama dengan `agy` asli", dan di
+  komentar main.go: hanya banner yang terpasang, sisanya komponen
+  yang dites tapi belum dipanggil. Baris `tools/` di pohon proyek
+  README juga hanya menyebut 8 dari 17 tool lalu "..." — kini
+  menyebut ke-17 nama tool `ToolDefs()` (+ approval gates). Tes baru
+  `TestReadmeTuiWiringIsHonest` mengunci kualifikasi itu di ketiga
+  permukaan dan ke-17 nama tool di baris `tools/` itu sendiri.
 - Dites: gofmt/vet/test -race 16 paket lolos, mutation check 5x
   (tui bullet, codesearch cap, codesearch query kosong, RunDue,
   Watch — semua tes gagal saat pengaman dilemahkan), build 5 OS,
