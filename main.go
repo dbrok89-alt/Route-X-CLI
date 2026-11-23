@@ -18,9 +18,11 @@
 // v0.5.0 wires in the features that landed on main as files only:
 // keyword-ranked codesearch (loop tool + /codesearch), a cron
 // watcher (`route-x cron watch`), and the terminal UI banner
-// (RenderBanner used by the REPL banner; the other components —
-// status bar, progress bar, box, markdown, spinner — are tested
-// but not yet called from production code).
+// (RenderBanner used by the REPL banner). PR #21 wires the rest
+// of the TUI into the REPL: the status bar and tool card for tool
+// progress, the progress bar for the agentic step cap, and
+// markdown rendering for agent replies. The spinner stays
+// test-only: its Start() ticks without ever printing a frame.
 //
 // Usage:
 //
@@ -284,18 +286,44 @@ func runPrompt(ag *agent.Agent, prompt string, onEvent func(loop.Event)) (string
 	return ag.Run(context.Background(), prompt)
 }
 
-// replEvent renders agentic-loop progress in the REPL.
+// replEvent renders agentic-loop progress in the REPL with the TUI
+// components (PR #21 wires in what PR #20 found test-only: the
+// status bar, tool card and progress bar). Print mode passes nil
+// for onEvent, so scripts and CI keep plain output; only the
+// interactive REPL gets ANSI rendering. The local provider never
+// reaches here — it uses keyword dispatch without events — so this
+// only fires for tool-capable providers (gemini, openai, anthropic,
+// ollama, intern).
 func replEvent(e loop.Event) {
+	theme := tui.DefaultTheme()
 	switch e.Kind {
 	case "tool_start":
-		fmt.Printf("  ▸ %s\n", e.Tool)
+		fmt.Println(tui.RenderStatusBar(tui.Status{Level: "INFO", Code: 0, Message: fmt.Sprintf("▸ %s (step %d)", e.Tool, e.Step)}, theme))
 	case "tool_result":
+		status := tui.Status{Level: "OK", Code: 200, Message: "done"}
 		if e.IsError {
-			fmt.Printf("    ✗ %s\n", firstLine(e.Text))
+			status = tui.Status{Level: "ERROR", Code: 500, Message: "failed"}
 		}
+		desc := shortLine(e.Text, 120)
+		if strings.TrimSpace(desc) == "" {
+			desc = "ok"
+		}
+		fmt.Println(tui.RenderToolCard(e.Tool, desc, status, theme))
 	case "done":
-		fmt.Printf("  [used %d in / %d out tokens]\n", e.Usage.InputTokens, e.Usage.OutputTokens)
+		fmt.Println(tui.RenderStatusBar(tui.Status{Level: "OK", Code: 200, Message: fmt.Sprintf("done — used %d in / %d out tokens", e.Usage.InputTokens, e.Usage.OutputTokens)}, theme))
+		fmt.Println(tui.RenderProgressBar(e.Step, loop.DefaultMaxSteps, 20, theme))
 	}
+}
+
+// shortLine keeps a one-line tool result readable inside a tool
+// card: first line only, capped so one very long line cannot
+// stretch the box across the terminal.
+func shortLine(s string, max int) string {
+	line := firstLine(s)
+	if r := []rune(line); len(r) > max {
+		return string(r[:max-3]) + "..."
+	}
+	return line
 }
 
 func firstLine(s string) string {
@@ -649,7 +677,9 @@ func runREPL(ag *agent.Agent, cfg config.Config, workdir string) {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			continue
 		}
-		fmt.Println(reply)
+		// Display-only: the raw reply is what gets saved to the
+		// session below; the terminal shows the markdown rendering.
+		fmt.Println(tui.RenderMarkdown(reply))
 		if ag.LastCheckpointID != "" && ag.LastCheckpointID != printedCheckpoint {
 			printedCheckpoint = ag.LastCheckpointID
 			fmt.Printf("  [checkpoint %s created — /checkpoint restore %s to undo]\n", printedCheckpoint, printedCheckpoint)
