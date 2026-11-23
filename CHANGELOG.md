@@ -122,6 +122,28 @@ bisa masuk tanpa gerbang CI.
   menyebut ke-17 nama tool `ToolDefs()` (+ approval gates). Tes baru
   `TestReadmeTuiWiringIsHonest` mengunci kualifikasi itu di ketiga
   permukaan dan ke-17 nama tool di baris `tools/` itu sendiri.
+  Catatan setelah rilis (PR #21): kualifikasi PR #20 itu kini
+  kedaluwarsa sebagian — status bar, tool card, progress bar,
+  dan markdown kini benar-benar dipanggil dari kode produksi:
+  `replEvent` di main.go memakai `RenderStatusBar` untuk awal
+  tool dan ringkasan token, `RenderToolCard` untuk hasil tiap
+  tool (OK 200 / ERROR 500, baris pertama hasil saja, dibatasi
+  120 karakter), `RenderProgressBar` untuk langkah terhadap
+  batas 10 langkah loop, dan jawaban agen di REPL dirender
+  lewat `RenderMarkdown` (hanya tampilan; yang disimpan ke sesi
+  tetap jawaban mentah). Print mode (`-p`) dan cron tetap
+  polos — keduanya tidak melewati `replEvent` — dan provider
+  `local` juga tidak, karena dispatch kata kuncinya tidak
+  memancarkan event. Yang masih jujur belum terpasang: `Spinner`
+  — `Start()`-nya berdetak tanpa pernah mencetak frame, jadi
+  memasangnya butuh perbaikan komponen itu dulu, bukan sekadar
+  pemanggilan. Tes baru `TestReplEventRendersTuiComponents`
+  menangkap stdout `replEvent` dan menegaskan tiap komponen;
+  `TestReplRendersAgentReplyAsMarkdown` menjalankan REPL dengan
+  provider skrip dan menegaskan terminal menampilkan bentuk
+  markdown sementara sesi menyimpan jawaban mentah; tes
+  kejujuran PR #20 diperbarui ke wording baru dan tetap
+  mengunci baris `tools/`.
 - Dites: gofmt/vet/test -race 16 paket lolos, mutation check 5x
   (tui bullet, codesearch cap, codesearch query kosong, RunDue,
   Watch — semua tes gagal saat pengaman dilemahkan), build 5 OS,
