@@ -164,6 +164,19 @@ bisa masuk tanpa gerbang CI.
   mengunci frame yang tercetak, baris yang dibersihkan, dan
   berhentinya spinner di event pertama; tes kejujuran PR #20/#21
   diperbarui ke wording PR #22.
+  Catatan setelah rilis (PR #23): halaman depan docs/index.html
+  masih diam soal TUI, codesearch, dan cron watch — padahal PR
+  #21/#22 sudah memasang keenam komponen TUI ke REPL dan
+  codesearch + cron watch sudah ada sejak v0.5.0. Halaman itu kini
+  menyebut Terminal UI (banner, status bar, tool card, progress
+  bar, jawaban markdown, spinner saat menunggu model; REPL saja,
+  print mode tetap polos) dan codesearch berperingkat kata kunci
+  (bukan semantik) plus `route-x cron watch`. Sekalian diperbaiki:
+  baris slash command halaman itu menulis `route-x cron watch`
+  seolah subcommand dari `/checkpoint`, padahal ia subcommand
+  `route-x` sendiri. Tes baru
+  `TestDocsDescribesTuiAndStabilityFeatures` mengunci deskripsi
+  baru itu dan menolak klaim "semantic search".
 - Dites: gofmt/vet/test -race 16 paket lolos, mutation check 5x
   (tui bullet, codesearch cap, codesearch query kosong, RunDue,
   Watch — semua tes gagal saat pengaman dilemahkan), build 5 OS,
