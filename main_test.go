@@ -175,6 +175,29 @@ func TestDocsListsAllTools(t *testing.T) {
 	}
 }
 
+// PR #22 wired all six TUI components into the REPL, but the
+// public landing page still said nothing about them — the same docs
+// drift PR #10 fixed for the tool list. Lock the new descriptions
+// the same way: the page must describe the Terminal UI and the code
+// search / cron features, must not call codesearch semantic search
+// (it is keyword-ranked, "not semantic"), and must not present
+// cron watch as a subcommand of /checkpoint — it is a route-x
+// subcommand of its own. (PR #23.)
+func TestDocsDescribesTuiAndStabilityFeatures(t *testing.T) {
+	html := readRepoFile(t, filepath.Join("docs", "index.html"))
+	for _, want := range []string{"Terminal UI", "spinner", "codesearch", "cron watch"} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("docs/index.html must describe %q", want)
+		}
+	}
+	if strings.Contains(html, "semantic search") {
+		t.Fatal("docs/index.html must not call codesearch semantic search — it is keyword-ranked")
+	}
+	if strings.Contains(html, "/checkpoint</code> — subcommands:") {
+		t.Fatal("docs/index.html must not present cron watch as a subcommand of /checkpoint")
+	}
+}
+
 // The same drift hit CONTRIBUTING.md, which PR #11 fixed for the
 // package list but not for the tools inside it: its `tools` bullet
 // listed only 12 of the 17 ToolDefs names — edit, skill, webfetch,
