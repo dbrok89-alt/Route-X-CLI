@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"bytes"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -112,4 +114,56 @@ func TestSpinnerStartStopConcurrency(t *testing.T) {
 
 	sp.Stop()
 	sp.Stop() // Test double stop safety
+}
+
+// PR #22: Spinner.Start used to tick without ever printing a
+// frame — the frame and label were discarded with `_ = idx` and
+// `_ = lbl`. A buffer-backed spinner must actually render frames
+// with its label, and Stop must erase the line it drew.
+func TestSpinnerRendersFrames(t *testing.T) {
+	var buf bytes.Buffer
+	sp := NewSpinnerTo("Loading...", &buf)
+	sp.Start()
+	time.Sleep(350 * time.Millisecond)
+	sp.Stop()
+	out := buf.String()
+	if !strings.Contains(out, "Loading...") {
+		t.Fatalf("spinner must render its label, got %q", out)
+	}
+	framed := false
+	for _, f := range []string{"|", "/", "-", "\\"} {
+		if strings.Contains(out, f) {
+			framed = true
+		}
+	}
+	if !framed {
+		t.Fatalf("spinner must render a frame, got %q", out)
+	}
+	// Stop erases the line: the output ends with carriage return,
+	// spaces, carriage return — no spinner residue left.
+	if !strings.HasSuffix(out, "\r") {
+		t.Fatalf("spinner Stop must clear its line, got %q", out)
+	}
+}
+
+// PR #22: the spinner must stay silent when its output is not a
+// terminal, so piped REPL sessions, scripts and CI keep clean
+// output. A temp file stands in for a redirected stdout.
+func TestSpinnerSkipsNonTerminal(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "spinner-*.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sp := NewSpinnerTo("Loading...", f)
+	sp.Start()
+	time.Sleep(350 * time.Millisecond)
+	sp.Stop()
+	_ = f.Close()
+	data, err := os.ReadFile(f.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data) != 0 {
+		t.Fatalf("spinner must not write to a non-terminal, got %q", data)
+	}
 }
