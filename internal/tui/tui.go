@@ -2,6 +2,8 @@ package tui
 
 import (
 	"fmt"
+	"io"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -212,20 +214,42 @@ func PromptString(prompt string) string {
 
 // Spinner represents a terminal spinner.
 type Spinner struct {
-	mu     sync.Mutex
-	label  string
-	active bool
-	stopCh chan struct{}
+	mu       sync.Mutex
+	label    string
+	active   bool
+	stopCh   chan struct{}
+	out      io.Writer
+	rendered bool // a frame has been written since Start
+	lastLen  int  // visible width of the last frame line
 }
 
-// NewSpinner constructs a new Spinner instance.
+// NewSpinner constructs a new Spinner instance writing to stdout.
 func NewSpinner(label string) *Spinner {
 	return &Spinner{
 		label: label,
+		out:   os.Stdout,
 	}
 }
 
-// Start starts the spinner animation.
+// NewSpinnerTo constructs a Spinner writing to w instead of
+// stdout, so tests can capture its frames. A nil writer means
+// stdout.
+func NewSpinnerTo(label string, w io.Writer) *Spinner {
+	if w == nil {
+		w = os.Stdout
+	}
+	return &Spinner{
+		label: label,
+		out:   w,
+	}
+}
+
+// Start starts the spinner animation. Every 100ms it rewrites one
+// line, "\r<frame> <label>", so a long wait shows progress without
+// scrolling. When the output is a file, pipe or anything that is
+// not a terminal, the spinner stays silent — piped sessions,
+// scripts and CI keep clean output — but Start/Stop remain safe
+// to call. Start is idempotent.
 func (s *Spinner) Start() {
 	s.mu.Lock()
 	if s.active {
@@ -234,7 +258,18 @@ func (s *Spinner) Start() {
 	}
 	s.active = true
 	s.stopCh = make(chan struct{})
+	s.rendered = false
+	s.lastLen = 0
+	animate := true
+	if f, ok := s.out.(*os.File); ok {
+		if fi, err := f.Stat(); err != nil || fi.Mode()&os.ModeCharDevice == 0 {
+			animate = false
+		}
+	}
 	s.mu.Unlock()
+	if !animate {
+		return
+	}
 
 	go func() {
 		frames := []string{"|", "/", "-", "\\"}
@@ -247,15 +282,16 @@ func (s *Spinner) Start() {
 				return
 			case <-ticker.C:
 				s.mu.Lock()
-				lbl := s.label
-				act := s.active
-				s.mu.Unlock()
-				if !act {
+				if !s.active {
+					s.mu.Unlock()
 					return
 				}
-				_ = idx
-				_ = lbl
+				frame := frames[idx]
 				idx = (idx + 1) % len(frames)
+				fmt.Fprint(s.out, "\r"+Cyan+frame+Reset+" "+s.label)
+				s.lastLen = 1 + 1 + len([]rune(s.label))
+				s.rendered = true
+				s.mu.Unlock()
 			}
 		}
 	}()
@@ -268,7 +304,10 @@ func (s *Spinner) UpdateLabel(label string) {
 	s.label = label
 }
 
-// Stop stops the spinner animation safely.
+// Stop stops the spinner animation safely. If a frame was
+// rendered, the line is erased (carriage return, spaces, carriage
+// return) so no spinner residue stays on screen. Idempotent:
+// calling it twice, or without Start, is a no-op.
 func (s *Spinner) Stop() {
 	s.mu.Lock()
 	if !s.active {
@@ -277,5 +316,9 @@ func (s *Spinner) Stop() {
 	}
 	s.active = false
 	close(s.stopCh)
+	if s.rendered {
+		fmt.Fprint(s.out, "\r"+strings.Repeat(" ", s.lastLen)+"\r")
+		s.rendered = false
+	}
 	s.mu.Unlock()
 }
