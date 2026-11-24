@@ -2,12 +2,14 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"route-x/internal/agent"
 	"route-x/internal/config"
@@ -242,10 +244,12 @@ func TestReadmeTreeListsAllTuiComponents(t *testing.T) {
 // so the claim was qualified in both README spots and in main.go
 // (PR #20). PR #21 wires four of the five back in: the status bar
 // and tool card for tool progress, the progress bar for the step
-// cap, and markdown rendering for agent replies — the spinner stays
-// test-only because its Start() ticks without ever printing a
-// frame. The wording below locks the new state; the tools/ line
-// still locks all 17 ToolDefs names on that line itself.
+// cap, and markdown rendering for agent replies. PR #22 closes the
+// last gap: the spinner's Start() now prints its frames, and the
+// REPL spins it while waiting for the model, stopping at the first
+// loop event — silent when stdout is not a terminal. The wording
+// below locks the new state; the tools/ line still locks all 17
+// ToolDefs names on that line itself.
 func TestReadmeTuiWiringIsHonest(t *testing.T) {
 	readme := readRepoFile(t, "README.md")
 	var v050Line string
@@ -258,7 +262,7 @@ func TestReadmeTuiWiringIsHonest(t *testing.T) {
 	if v050Line == "" {
 		t.Fatal("README is missing the v0.5.0 paragraph")
 	}
-	for _, want := range []string{"PR #21", "spinner masih test-only"} {
+	for _, want := range []string{"PR #21", "PR #22", "spinner menunggu jawaban model"} {
 		if !strings.Contains(v050Line, want) {
 			t.Fatalf("README v0.5.0 paragraph must describe the PR #21 wiring with %q:\n%s", want, v050Line)
 		}
@@ -277,13 +281,13 @@ func TestReadmeTuiWiringIsHonest(t *testing.T) {
 	if agyLine == "" {
 		t.Fatal("README \"Yang tidak sama dengan `agy` asli\" is missing the TUI bullet")
 	}
-	for _, want := range []string{"(PR #21)", "spinner masih test-only"} {
+	for _, want := range []string{"(PR #21)", "(PR #22)", "spinner menunggu jawaban model"} {
 		if !strings.Contains(agyLine, want) {
 			t.Fatalf("README TUI bullet must describe the PR #21 wiring with %q:\n%s", want, agyLine)
 		}
 	}
 	mainGo := readRepoFile(t, "main.go")
-	for _, want := range []string{"PR #21 wires the rest", "The spinner stays"} {
+	for _, want := range []string{"PR #21 wires the rest", "PR #22 fixes the spinner"} {
 		if !strings.Contains(mainGo, want) {
 			t.Fatalf("main.go v0.5.0 package comment must describe the PR #21 wiring with %q", want)
 		}
@@ -366,6 +370,35 @@ func TestReplEventRendersTuiComponents(t *testing.T) {
 			t.Fatalf("done must render the token summary and progress bar with %q, got:\n%s", want, out)
 		}
 	}
+}
+
+// PR #22 wires a spinner into the REPL while it waits for the
+// model: spinnerEvent stops the spinner on the first loop event
+// and forwards the event to replEvent. Drive it with a
+// buffer-backed spinner and assert both sides: the spinner must
+// have rendered before the event, must write nothing more after
+// it, and the wrapped handler must still receive the event.
+func TestSpinnerEventStopsSpinner(t *testing.T) {
+	var buf bytes.Buffer
+	sp := tui.NewSpinnerTo("Thinking...", &buf)
+	sp.Start()
+	time.Sleep(350 * time.Millisecond) // let at least one frame render
+	var got []loop.Event
+	wrapped := spinnerEvent(sp, func(e loop.Event) { got = append(got, e) })
+	wrapped(loop.Event{Kind: "text", Text: "hi", Step: 1})
+	if len(got) != 1 || got[0].Kind != "text" {
+		t.Fatalf("wrapped handler must forward the event, got %v", got)
+	}
+	if !strings.Contains(buf.String(), "Thinking...") {
+		t.Fatalf("spinner must have rendered a frame before the event, got %q", buf.String())
+	}
+	// After Stop, no further frames may appear.
+	n := buf.Len()
+	time.Sleep(250 * time.Millisecond)
+	if buf.Len() != n {
+		t.Fatalf("spinner kept writing after Stop: %q", buf.String()[n:])
+	}
+	sp.Stop() // double stop must stay safe
 }
 
 // scriptedReplyProvider answers every agentic step with one fixed
