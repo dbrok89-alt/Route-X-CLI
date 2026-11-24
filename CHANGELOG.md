@@ -144,6 +144,26 @@ bisa masuk tanpa gerbang CI.
   markdown sementara sesi menyimpan jawaban mentah; tes
   kejujuran PR #20 diperbarui ke wording baru dan tetap
   mengunci baris `tools/`.
+  Catatan setelah rilis (PR #22): `Spinner` yang PR #21 tinggalkan
+  sebagai satu-satunya komponen TUI yang belum terpasang kini
+  diperbaiki dan dipasang. `Start()`-nya dulu berdetak tiap 100ms
+  tapi membuang frame dan label (`_ = idx`, `_ = lbl`) sehingga
+  tidak pernah mencetak apa pun; kini tiap tick menulis
+  `\r<frame> <label>` ke output dan `Stop()` menghapus barisnya
+  lagi. Pemasangannya di REPL: spinner berlabel "Thinking..."
+  mulai sebelum `runPrompt` dan berhenti di event loop pertama
+  (token pertama, awal tool, atau selesai) lewat pembungkus
+  `spinnerEvent` — jadi ia menutup satu-satunya jeda yang selama
+  ini tanpa umpan balik, yaitu menunggu jawaban model; eksekusi
+  tool sendiri sudah dilaporkan status bar + tool card, jadi tidak
+  dipasangi spinner lagi. Spinner diam saat stdout bukan terminal
+  (dicek `ModeCharDevice`), sehingga REPL terpipa, skrip, dan CI
+  tetap bersih; print mode (`-p`) dan cron tetap polos karena
+  tidak lewat REPL. Tes baru `TestSpinnerRendersFrames`,
+  `TestSpinnerSkipsNonTerminal`, dan `TestSpinnerEventStopsSpinner`
+  mengunci frame yang tercetak, baris yang dibersihkan, dan
+  berhentinya spinner di event pertama; tes kejujuran PR #20/#21
+  diperbarui ke wording PR #22.
 - Dites: gofmt/vet/test -race 16 paket lolos, mutation check 5x
   (tui bullet, codesearch cap, codesearch query kosong, RunDue,
   Watch — semua tes gagal saat pengaman dilemahkan), build 5 OS,
