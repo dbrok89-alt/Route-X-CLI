@@ -21,8 +21,10 @@
 // (RenderBanner used by the REPL banner). PR #21 wires the rest
 // of the TUI into the REPL: the status bar and tool card for tool
 // progress, the progress bar for the agentic step cap, and
-// markdown rendering for agent replies. The spinner stays
-// test-only: its Start() ticks without ever printing a frame.
+// markdown rendering for agent replies. PR #22 fixes the spinner
+// (its Start() ticked without ever printing a frame) and wires it
+// into the REPL while waiting for the model: it spins until the
+// first loop event, then replEvent takes over reporting progress.
 //
 // Usage:
 //
@@ -312,6 +314,21 @@ func replEvent(e loop.Event) {
 	case "done":
 		fmt.Println(tui.RenderStatusBar(tui.Status{Level: "OK", Code: 200, Message: fmt.Sprintf("done — used %d in / %d out tokens", e.Usage.InputTokens, e.Usage.OutputTokens)}, theme))
 		fmt.Println(tui.RenderProgressBar(e.Step, loop.DefaultMaxSteps, 20, theme))
+	}
+}
+
+// spinnerEvent wraps an event handler so a spinner runs while
+// the REPL waits for the model to respond — the one stretch with
+// no other feedback. The first event (first token, tool start,
+// or done) stops it, after which replEvent itself reports
+// progress; Stop is idempotent, so the explicit Stop after
+// runPrompt is a safety net for a run that errors before any
+// event. The spinner stays silent when stdout is not a terminal,
+// so piped REPL sessions keep clean output.
+func spinnerEvent(sp *tui.Spinner, next func(loop.Event)) func(loop.Event) {
+	return func(e loop.Event) {
+		sp.Stop()
+		next(e)
 	}
 }
 
@@ -668,7 +685,10 @@ func runREPL(ag *agent.Agent, cfg config.Config, workdir string) {
 		sess.Messages = append(sess.Messages, session.Message{Role: "user", Content: line, Time: time.Now().Format(time.RFC3339)})
 		prevDiff := ag.LastDiff
 		fire("PreToolUse")
-		reply, err := runPrompt(ag, line, replEvent)
+		spin := tui.NewSpinner("Thinking...")
+		spin.Start()
+		reply, err := runPrompt(ag, line, spinnerEvent(spin, replEvent))
+		spin.Stop()
 		fire("PostToolUse")
 		if ag.LastDiff != prevDiff {
 			fire("PostEdit")
