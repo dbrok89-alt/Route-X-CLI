@@ -225,6 +225,35 @@ func TestDocsDescribesTuiAndStabilityFeatures(t *testing.T) {
 	}
 }
 
+// --help defines five flags README never mentioned: -z and --print
+// (print-mode aliases of -p), -v (alias of --version), and the
+// functional --sandbox / --approval flags. The exhaustive PR #15
+// test only locks slash commands, so this gap slipped through.
+// Lock both sides: the flag must be defined in main.go and
+// documented in README in backticks. The backticks matter: a bare
+// "-v" check would pass on "--version" alone, which is all README
+// had before — and for --sandbox/--approval the check uses the
+// bullet form ("`--sandbox <nama>`") because the closing note
+// also names both flags in backticks. (PR #25.)
+func TestReadmeDocumentsCliFlags(t *testing.T) {
+	readme := readRepoFile(t, "README.md")
+	src := readRepoFile(t, "main.go")
+	for _, f := range []struct{ def, doc string }{
+		{`flag.Bool("z"`, "`-z`"},
+		{`flag.Bool("print"`, "`--print`"},
+		{`flag.Bool("v"`, "`-v`"},
+		{`flag.String("sandbox"`, "`--sandbox <nama>`"},
+		{`flag.String("approval"`, "`--approval <nama>`"},
+	} {
+		if !strings.Contains(src, f.def) {
+			t.Fatalf("main.go must define the %s flag", f.def)
+		}
+		if !strings.Contains(readme, f.doc) {
+			t.Fatalf("README must document the %s flag (update it when adding a flag)", f.doc)
+		}
+	}
+}
+
 // The same drift hit CONTRIBUTING.md, which PR #11 fixed for the
 // package list but not for the tools inside it: its `tools` bullet
 // listed only 12 of the 17 ToolDefs names — edit, skill, webfetch,
