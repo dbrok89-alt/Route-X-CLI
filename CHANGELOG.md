@@ -194,6 +194,19 @@ bisa masuk tanpa gerbang CI.
   `/checkpoint` tidak boleh memuat ketiganya, dan harus ada
   paragraf Subcommands terpisah yang menyebut `route-x cron
   watch`.
+  Catatan setelah rilis (PR #25): lima flag asli `--help` tidak
+  disebut sama sekali di README — `-z` dan `--print` (alias print
+  mode `-p`), `-v` (alias `--version`), serta `--sandbox` dan
+  `--approval` (flag fungsional). Satu-satunya penyebutan `-z` di
+  repo ada di CHANGELOG v0.2.0; tes ekshaustif PR #15 hanya
+  mengunci slash command, jadi celah flag ini lolos. README kini
+  mendokumentasikan kelimanya di "## Pakai", dengan catatan jujur:
+  `--sandbox`/`--approval` hanya berlaku untuk jalan itu, tidak
+  mengubah config tersimpan (config.Save hanya dipanggil dari
+  handleSlash). Tes baru `TestReadmeDocumentsCliFlags` mengunci
+  definisi flag di main.go dan bentuk backtick-nya di README —
+  bentuk backtick itu penting, karena cek "-v" polos akan lolos
+  lewat substring `--version`.
 - Dites: gofmt/vet/test -race 16 paket lolos, mutation check 5x
   (tui bullet, codesearch cap, codesearch query kosong, RunDue,
   Watch — semua tes gagal saat pengaman dilemahkan), build 5 OS,
