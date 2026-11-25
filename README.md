@@ -81,6 +81,15 @@ route-x> /agent cari FIXME
 route-x> /agents
 ```
 
+Flag lain (lihat `--help` untuk daftar lengkap):
+
+- `-z` dan `--print` — sama seperti `-p`: print mode, sekali jalan lalu keluar.
+- `-v` — sama seperti `--version`: tampilkan versi lalu keluar.
+- `--sandbox <nama>` — sandbox untuk jalan ini saja: `read-only`, `workspace-write`, atau `danger-full-access`.
+- `--approval <nama>` — approval untuk jalan ini saja: `on-request` atau `never`.
+
+Flag `--sandbox` dan `--approval` hanya berlaku untuk jalan itu, tidak mengubah config tersimpan.
+
 ## Slash command
 
 | Perintah | Fungsi |
