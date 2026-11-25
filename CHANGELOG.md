@@ -177,6 +177,23 @@ bisa masuk tanpa gerbang CI.
   `route-x` sendiri. Tes baru
   `TestDocsDescribesTuiAndStabilityFeatures` mengunci deskripsi
   baru itu dan menolak klaim "semantic search".
+  Catatan setelah rilis (PR #24): koreksi atas PR #23 — klaim
+  "sekalian diperbaiki" untuk baris slash command ternyata belum
+  tuntas. PR #23 hanya mengubah "— subcommands:" menjadi "— list
+  and restore checkpoints. Subcommands:", tapi ketiganya tetap
+  satu paragraf dengan `/checkpoint`, jadi pembaca masih wajar
+  menyimpulkan cron/serve/share adalah subcommand dari
+  `/checkpoint`. Tes PR #23 lolos karena ceknya terlalu sempit:
+  ia hanya melarang string persis "/checkpoint</code> —
+  subcommands:" (huruf s kecil, langsung setelah kode), sementara
+  baris yang ada memakai "Subcommands:" kapital setelah deskripsi.
+  Baris itu kini dipisah jadi dua paragraf — `/checkpoint`
+  sendiri, dan paragraf Subcommands tersendiri untuk `route-x
+  cron watch` / `serve` / `share` (dijalankan dari shell, bukan
+  dari REPL) — dan tesnya dikunci secara struktural: paragraf
+  `/checkpoint` tidak boleh memuat ketiganya, dan harus ada
+  paragraf Subcommands terpisah yang menyebut `route-x cron
+  watch`.
 - Dites: gofmt/vet/test -race 16 paket lolos, mutation check 5x
   (tui bullet, codesearch cap, codesearch query kosong, RunDue,
   Watch — semua tes gagal saat pengaman dilemahkan), build 5 OS,
