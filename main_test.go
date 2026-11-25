@@ -193,8 +193,35 @@ func TestDocsDescribesTuiAndStabilityFeatures(t *testing.T) {
 	if strings.Contains(html, "semantic search") {
 		t.Fatal("docs/index.html must not call codesearch semantic search — it is keyword-ranked")
 	}
-	if strings.Contains(html, "/checkpoint</code> — subcommands:") {
-		t.Fatal("docs/index.html must not present cron watch as a subcommand of /checkpoint")
+	// /checkpoint is a REPL slash command (list/restore); route-x
+	// cron watch, serve and share are shell subcommands of their
+	// own. They must not share a paragraph: PR #23 only forbade
+	// the exact string "/checkpoint</code> — subcommands:", so its
+	// rewording ("list and restore checkpoints. Subcommands:")
+	// still put them in the /checkpoint paragraph and the test
+	// passed anyway. Lock the separation structurally instead —
+	// the /checkpoint paragraph must contain none of the three
+	// subcommands, and a separate Subcommands paragraph must
+	// name route-x cron watch. (PR #24.)
+	var checkpointLine, subcommandsLine string
+	for _, line := range strings.Split(html, "\n") {
+		if strings.Contains(line, "/checkpoint") {
+			checkpointLine = line
+		}
+		if strings.Contains(line, "Subcommands:") {
+			subcommandsLine = line
+		}
+	}
+	if checkpointLine == "" {
+		t.Fatal("docs/index.html is missing the /checkpoint line")
+	}
+	for _, sub := range []string{"route-x cron", "route-x serve", "route-x share"} {
+		if strings.Contains(checkpointLine, sub) {
+			t.Fatalf("docs/index.html must not put %q in the /checkpoint paragraph:\n%s", sub, checkpointLine)
+		}
+	}
+	if subcommandsLine == "" || !strings.Contains(subcommandsLine, "route-x cron watch") {
+		t.Fatalf("docs/index.html must have a separate Subcommands paragraph naming route-x cron watch, got:\n%s", subcommandsLine)
 	}
 }
 
