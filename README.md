@@ -87,8 +87,13 @@ Flag lain (lihat `--help` untuk daftar lengkap):
 - `-v` — sama seperti `--version`: tampilkan versi lalu keluar.
 - `--sandbox <nama>` — sandbox untuk jalan ini saja: `read-only`, `workspace-write`, atau `danger-full-access`.
 - `--approval <nama>` — approval untuk jalan ini saja: `on-request` atau `never`.
+- `--output <format>` — output print mode: `text` | `json` | `stream-json` (default `text`).
+- `--model <nama>` — model untuk jalan ini (default dari config).
+- `--mode <nama>` — mode untuk jalan ini: `default` | `accept-edits` | `auto` | `plan`.
+- `--provider <nama>` — provider untuk jalan ini: `local` | `gemini` | `openai` | `anthropic` | `ollama` | `intern`.
+- `--base-url <url>` — endpoint OpenAI-compatible untuk jalan ini (provider `openai`/`ollama`).
 
-Flag `--sandbox` dan `--approval` hanya berlaku untuk jalan itu, tidak mengubah config tersimpan.
+Flag `--model`, `--mode`, `--provider`, `--sandbox`, `--approval`, dan `--base-url` hanya berlaku untuk jalan itu, tidak mengubah config tersimpan (yang menyimpan adalah slash command `/model`, `/mode`, `/provider`, `/sandbox`, dan `/approval`). `--output` hanya mengatur format print mode.
 
 ## Slash command
 
