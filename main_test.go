@@ -297,31 +297,52 @@ func TestReadmeDocumentsShareProvider(t *testing.T) {
 	}
 }
 
-// --help defines five flags README never mentioned: -z and --print
-// (print-mode aliases of -p), -v (alias of --version), and the
-// functional --sandbox / --approval flags. The exhaustive PR #15
-// test only locks slash commands, so this gap slipped through.
-// Lock both sides: the flag must be defined in main.go and
-// documented in README in backticks. The backticks matter: a bare
-// "-v" check would pass on "--version" alone, which is all README
-// had before — and for --sandbox/--approval the check uses the
-// bullet form ("`--sandbox <nama>`") because the closing note
-// also names both flags in backticks. (PR #25.)
+// --help defines twelve top-level flags; README's "Flag lain"
+// list only documented 5 of them (PR #25). The other five —
+// --output, --model, --mode, --provider, --base-url — were only
+// mentioned incidentally in prose and examples, never as list
+// entries, and the run-only footnote named only --sandbox and
+// --approval although all six config-affecting flags are run-only
+// (config.Save is only called from handleSlash, for /model,
+// /mode, /provider, /sandbox, /approval). Lock all ten flags as
+// bullets in the "Flag lain" section itself — a whole-file check
+// would pass falsely on the incidental mentions — and lock the
+// footnote to all six flags. (PR #28.)
 func TestReadmeDocumentsCliFlags(t *testing.T) {
 	readme := readRepoFile(t, "README.md")
 	src := readRepoFile(t, "main.go")
+	flags := readmeSection(t, readme, "Flag lain")
 	for _, f := range []struct{ def, doc string }{
 		{`flag.Bool("z"`, "`-z`"},
 		{`flag.Bool("print"`, "`--print`"},
 		{`flag.Bool("v"`, "`-v`"},
+		{`flag.String("output"`, "`--output <format>`"},
+		{`flag.String("model"`, "`--model <nama>`"},
+		{`flag.String("mode"`, "`--mode <nama>`"},
+		{`flag.String("provider"`, "`--provider <nama>`"},
 		{`flag.String("sandbox"`, "`--sandbox <nama>`"},
 		{`flag.String("approval"`, "`--approval <nama>`"},
+		{`flag.String("base-url"`, "`--base-url <url>`"},
 	} {
 		if !strings.Contains(src, f.def) {
 			t.Fatalf("main.go must define the %s flag", f.def)
 		}
-		if !strings.Contains(readme, f.doc) {
-			t.Fatalf("README must document the %s flag (update it when adding a flag)", f.doc)
+		if !strings.Contains(flags, f.doc) {
+			t.Fatalf("README \"Flag lain\" list must document the %s flag as a bullet (update it when adding a flag)", f.doc)
+		}
+	}
+	var footnote string
+	for _, line := range strings.Split(flags, "\n") {
+		if strings.Contains(line, "tidak mengubah config tersimpan") {
+			footnote = line
+		}
+	}
+	if footnote == "" {
+		t.Fatal("README \"Flag lain\" section is missing the run-only footnote")
+	}
+	for _, want := range []string{"`--model`", "`--mode`", "`--provider`", "`--sandbox`", "`--approval`", "`--base-url`"} {
+		if !strings.Contains(footnote, want) {
+			t.Fatalf("README run-only footnote must name %s, got:\n%s", want, footnote)
 		}
 	}
 }
