@@ -225,6 +225,16 @@ bisa masuk tanpa gerbang CI.
   membuka bind publik akan salah, dan memasangnya sungguhan
   adalah perubahan perilaku keamanan yang butuh keputusan
   sendiri, bukan PR docs.
+  Catatan setelah rilis (PR #27): sisa dari rancangan PR #26 —
+  bentuk flag `route-x share --provider <nama>` (default `ngrok`,
+  pilihan `ngrok`/`cloudflared`/`localhost.run`) ada di `--help`
+  tapi tidak ada di README; README hanya menyebut nama provider
+  di prosa. Bullet serve/share kini memberi contoh
+  `route-x share --provider cloudflared --port 8080` dengan
+  default dan pilihannya. Tes baru
+  `TestReadmeDocumentsShareProvider` mengunci bentuk flag itu di
+  bullet serve/share dan definisinya di main.go. (PR #26 sendiri
+  sudah mendokumentasikan kedua env var serve/LSP.)
 - Dites: gofmt/vet/test -race 16 paket lolos, mutation check 5x
   (tui bullet, codesearch cap, codesearch query kosong, RunDue,
   Watch — semua tes gagal saat pengaman dilemahkan), build 5 OS,
