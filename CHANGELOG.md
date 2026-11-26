@@ -235,6 +235,21 @@ bisa masuk tanpa gerbang CI.
   `TestReadmeDocumentsShareProvider` mengunci bentuk flag itu di
   bullet serve/share dan definisinya di main.go. (PR #26 sendiri
   sudah mendokumentasikan kedua env var serve/LSP.)
+  Catatan setelah rilis (PR #28): daftar "Flag lain" README hanya
+  memuat 5 flag hasil PR #25 — lima flag lainnya (`--output`,
+  `--model`, `--mode`, `--provider`, `--base-url`) hanya disebut
+  insidental di prosa dan contoh, tidak pernah sebagai entri
+  daftar. Kelimanya kini masuk daftar mengikuti definisi persis
+  `--help`. Sekalian dikoreksi catatan run-only: bukan hanya
+  `--sandbox`/`--approval` — keenam flag yang mengubah config
+  (`--model`, `--mode`, `--provider`, `--sandbox`, `--approval`,
+  `--base-url`) hanya berlaku untuk jalan itu, karena config.Save
+  hanya dipanggil dari slash command `/model`, `/mode`,
+  `/provider`, `/sandbox`, `/approval`; `--output` bahkan bukan
+  field config (print mode saja). Tes
+  `TestReadmeDocumentsCliFlags` diperluas ke 10 entri dan di-scope
+  ke bagian "Flag lain" — cek seluruh file akan lolos palsu lewat
+  penyebutan insidental.
 - Dites: gofmt/vet/test -race 16 paket lolos, mutation check 5x
   (tui bullet, codesearch cap, codesearch query kosong, RunDue,
   Watch — semua tes gagal saat pengaman dilemahkan), build 5 OS,
