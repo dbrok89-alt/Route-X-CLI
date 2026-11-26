@@ -207,6 +207,24 @@ bisa masuk tanpa gerbang CI.
   definisi flag di main.go dan bentuk backtick-nya di README —
   bentuk backtick itu penting, karena cek "-v" polos akan lolos
   lewat substring `--version`.
+  Catatan setelah rilis (PR #26): dua env var yang mengubah
+  perilaku nyata tidak ada di README — `ROUTE_X_SERVE_TOKEN`
+  (serve memakai token itu bila diset, bukan token acak baru;
+  sengaja tanpa flag CLI supaya tidak bocor ke shell history)
+  dan `ROUTE_X_LSP_COMMAND` (perintah server LSP, didahulukan
+  atas `lsp_server` di config). README:38 bahkan menulis token
+  serve "dibuat baru tiap jalan" tanpa kualifikasi — kini
+  dikualifikasi. Tes baru
+  `TestReadmeDocumentsServeAndLspEnvVars` mengunci kedua env var
+  itu di README, ter-scope ke paragrafnya masing-masing.
+  Sengaja TIDAK didokumentasikan: `ROUTE_X_ALLOW_PRIVATE_FETCH`
+  adalah escape hatch test-only untuk SSRF guard webfetch, dan
+  `--allow-public-bind` — meski di-parse — saat ini tidak
+  berpengaruh apa-apa, karena `runServeOrShare` selalu bind
+  127.0.0.1 (satu-satunya pemanggil `serve.New`); mengklaimnya
+  membuka bind publik akan salah, dan memasangnya sungguhan
+  adalah perubahan perilaku keamanan yang butuh keputusan
+  sendiri, bukan PR docs.
 - Dites: gofmt/vet/test -race 16 paket lolos, mutation check 5x
   (tui bullet, codesearch cap, codesearch query kosong, RunDue,
   Watch — semua tes gagal saat pengaman dilemahkan), build 5 OS,
