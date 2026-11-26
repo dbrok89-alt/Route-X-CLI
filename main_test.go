@@ -225,6 +225,45 @@ func TestDocsDescribesTuiAndStabilityFeatures(t *testing.T) {
 	}
 }
 
+// Two environment variables that change real behavior were
+// nowhere in README: ROUTE_X_SERVE_TOKEN (serve.NewToken uses it
+// instead of a fresh random token; deliberately no CLI flag so it
+// cannot leak into shell history) and ROUTE_X_LSP_COMMAND (the
+// LSP server command, taking precedence over lsp_server in
+// config). README even claimed the serve token is "dibuat baru
+// tiap jalan", which is wrong when the env var is set. Lock both
+// mentions in README, scoped to the paragraph that must carry
+// them, so a passing whole-file check cannot hide a deleted
+// sentence. (PR #26.)
+//
+// Deliberately NOT documented here: ROUTE_X_ALLOW_PRIVATE_FETCH
+// is a test-only escape hatch for the webfetch SSRF guard
+// ("tests only", internal/web/web.go), and --allow-public-bind,
+// though parsed, currently has no effect — runServeOrShare always
+// binds 127.0.0.1, serve.New's only caller — so README must not
+// claim it lifts the loopback restriction.
+func TestReadmeDocumentsServeAndLspEnvVars(t *testing.T) {
+	readme := readRepoFile(t, "README.md")
+	for _, want := range []string{"ROUTE_X_SERVE_TOKEN", "ROUTE_X_LSP_COMMAND"} {
+		if !strings.Contains(readme, want) {
+			t.Fatalf("README must document %q", want)
+		}
+	}
+	agy := readmeSection(t, readme, "## Yang tidak sama dengan `agy` asli")
+	if !strings.Contains(agy, "ROUTE_X_SERVE_TOKEN") {
+		t.Fatal("README serve bullet must mention ROUTE_X_SERVE_TOKEN")
+	}
+	found := false
+	for _, line := range strings.Split(readme, "\n") {
+		if strings.Contains(line, "lsp_server") && strings.Contains(line, "ROUTE_X_LSP_COMMAND") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("README LSP sentence must mention ROUTE_X_LSP_COMMAND alongside lsp_server")
+	}
+}
+
 // --help defines five flags README never mentioned: -z and --print
 // (print-mode aliases of -p), -v (alias of --version), and the
 // functional --sandbox / --approval flags. The exhaustive PR #15
