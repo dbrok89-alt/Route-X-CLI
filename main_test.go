@@ -264,6 +264,39 @@ func TestReadmeDocumentsServeAndLspEnvVars(t *testing.T) {
 	}
 }
 
+// The share tunnel provider flag form was the third knob of the
+// PR #26 design: --help lists `route-x share [--provider
+// ngrok|cloudflared|localhost.run]`, but README only named the
+// providers in prose and never showed the flag. Lock the flag
+// form in the serve/share bullet itself, plus its definition and
+// usage form in main.go — the global --provider flag is a
+// different flag (LLM provider), so a whole-file "--provider"
+// check would pass falsely. (PR #27.)
+func TestReadmeDocumentsShareProvider(t *testing.T) {
+	readme := readRepoFile(t, "README.md")
+	src := readRepoFile(t, "main.go")
+	if !strings.Contains(src, `fs.String("provider", "ngrok"`) {
+		t.Fatal("main.go must define the share --provider flag with default ngrok")
+	}
+	if !strings.Contains(src, "route-x share [--provider") {
+		t.Fatal("main.go --help must show the route-x share --provider usage form")
+	}
+	var bullet string
+	for _, line := range strings.Split(readme, "\n") {
+		if strings.HasPrefix(line, "- `serve`/`share`:") {
+			bullet = line
+		}
+	}
+	if bullet == "" {
+		t.Fatal("README is missing the serve/share bullet")
+	}
+	for _, want := range []string{"`route-x share --provider cloudflared --port 8080`", "default `ngrok`"} {
+		if !strings.Contains(bullet, want) {
+			t.Fatalf("README serve/share bullet must contain %s, got:\n%s", want, bullet)
+		}
+	}
+}
+
 // --help defines five flags README never mentioned: -z and --print
 // (print-mode aliases of -p), -v (alias of --version), and the
 // functional --sandbox / --approval flags. The exhaustive PR #15
