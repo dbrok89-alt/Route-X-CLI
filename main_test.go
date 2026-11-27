@@ -264,6 +264,45 @@ func TestReadmeDocumentsServeAndLspEnvVars(t *testing.T) {
 	}
 }
 
+// OLLAMA_API_KEY was the last undocumented real env var: every
+// other provider key (GEMINI/OPENAI/ANTHROPIC/INTERN_API_KEY) is
+// named in the "Provider lain" bullet, but ollama only got its
+// endpoint. EnvAPIKey("ollama") is genuinely honoured —
+// agent.go:1004 feeds it to OpenAICompatibleProvider, which sends
+// it as a Bearer token when non-empty — so a remote endpoint that
+// needs auth (e.g. Ollama Cloud) was undocumented while local
+// Ollama needs no key at all. Lock the key in the ollama clause
+// itself, plus the code that reads and sends it: a whole-file
+// check would pass falsely once the key is named anywhere else.
+// (PR #29.) ROUTE_X_ALLOW_PRIVATE_FETCH stays undocumented on
+// purpose: it is a test-only SSRF-guard escape hatch (PR #26).
+func TestReadmeDocumentsOllamaApiKey(t *testing.T) {
+	readme := readRepoFile(t, "README.md")
+	cfgSrc := readRepoFile(t, "internal/config/config.go")
+	agentSrc := readRepoFile(t, "internal/agent/agent.go")
+	if !strings.Contains(cfgSrc, `os.Getenv("OLLAMA_API_KEY")`) {
+		t.Fatal("config.EnvAPIKey must read OLLAMA_API_KEY for the ollama provider")
+	}
+	if !strings.Contains(agentSrc, `req.Header.Set("Authorization", "Bearer "+p.APIKey)`) {
+		t.Fatal("OpenAICompatibleProvider must send its API key as a Bearer token when set")
+	}
+	var bullet string
+	for _, line := range strings.Split(readme, "\n") {
+		if strings.Contains(line, "`ollama`") && strings.Contains(line, "Provider lain") {
+			bullet = line
+		}
+	}
+	if bullet == "" {
+		t.Fatal("README \"Provider lain\" bullet is missing")
+	}
+	if !strings.Contains(bullet, "OLLAMA_API_KEY") {
+		t.Fatalf("README \"Provider lain\" bullet must name OLLAMA_API_KEY for ollama, got:\n%s", bullet)
+	}
+	if !strings.Contains(bullet, "tidak butuh kunci") {
+		t.Fatalf("README ollama clause must say local Ollama needs no key, got:\n%s", bullet)
+	}
+}
+
 // The share tunnel provider flag form was the third knob of the
 // PR #26 design: --help lists `route-x share [--provider
 // ngrok|cloudflared|localhost.run]`, but README only named the
