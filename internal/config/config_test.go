@@ -65,6 +65,10 @@ func TestValidSandboxAndApproval(t *testing.T) {
 	if EnvAPIKey("openai") != "sk-test" {
 		t.Fatal("EnvAPIKey(openai) did not read env var")
 	}
+	t.Setenv("OLLAMA_API_KEY", "sk-ollama-test")
+	if EnvAPIKey("ollama") != "sk-ollama-test" {
+		t.Fatal("EnvAPIKey(ollama) did not read env var")
+	}
 }
 
 func TestMaskedAPIKey(t *testing.T) {
