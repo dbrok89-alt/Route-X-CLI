@@ -250,6 +250,21 @@ bisa masuk tanpa gerbang CI.
   `TestReadmeDocumentsCliFlags` diperluas ke 10 entri dan di-scope
   ke bagian "Flag lain" — cek seluruh file akan lolos palsu lewat
   penyebutan insidental.
+  Catatan setelah rilis (PR #29): `OLLAMA_API_KEY` adalah env var
+  nyata terakhir yang belum terdokumentasi — keempat kunci provider
+  lain (`GEMINI`/`OPENAI`/`ANTHROPIC`/`INTERN_API_KEY`) sudah
+  disebut di bullet "Provider lain", tapi `ollama` hanya disebut
+  endpoint lokalnya. Padahal `EnvAPIKey("ollama")` sungguh dipakai:
+  agent memberi kunci itu ke `OpenAICompatibleProvider`, yang
+  mengirimnya sebagai Bearer bila diset — jadi endpoint jarak jauh
+  yang butuh auth (misal Ollama Cloud) tidak terdokumentasi,
+  sementara Ollama lokal memang tidak butuh kunci. Bullet itu kini
+  menyebut `OLLAMA_API_KEY` dengan kualifikasi tersebut. Tes baru
+  `TestReadmeDocumentsOllamaApiKey` mengunci kunci itu di klausul
+  `ollama` itu sendiri (bukan cek seluruh file), plus kode yang
+  membaca dan mengirimnya; tes `EnvAPIKey` kini juga mencakup
+  `ollama`. `ROUTE_X_ALLOW_PRIVATE_FETCH` tetap sengaja tidak
+  didokumentasikan (escape hatch test-only untuk SSRF guard).
 - Dites: gofmt/vet/test -race 16 paket lolos, mutation check 5x
   (tui bullet, codesearch cap, codesearch query kosong, RunDue,
   Watch — semua tes gagal saat pengaman dilemahkan), build 5 OS,
